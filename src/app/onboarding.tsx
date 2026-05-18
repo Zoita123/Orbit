@@ -1,7 +1,9 @@
+import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect } from 'react';
 import { Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Animated, {
+  cancelAnimation,
   Easing,
   useAnimatedStyle,
   useSharedValue,
@@ -20,113 +22,50 @@ const CARD_BG = '#13142A';
 const GRAY = '#9CA3AF';
 const BODY = '#6B7280';
 
-const ORBIT_SIZE = Math.min(SW * 0.82, 320);
-const CENTER_SIZE = 76;
-const RING_1 = ORBIT_SIZE * 0.5;
-const RING_2 = ORBIT_SIZE * 0.72;
-const DOT_SIZE = 10;
+const SCENE_W = SW - 40;
+const SCENE_H = 230;
+const RING_SIZE = SCENE_W * 0.46;
+const CENTER_SIZE = 50;
+const CARD_W = Math.round(SCENE_W * 0.52);
+const DOT_SIZE = 8;
 
-function OrbitDot({
-  ringSize,
-  color,
-  duration,
-  startAngle = 0,
-}: {
-  ringSize: number;
-  color: string;
-  duration: number;
-  startAngle?: number;
-}) {
-  const angle = useSharedValue(startAngle);
-
-  useEffect(() => {
-    angle.value = withRepeat(
-      withTiming(startAngle + 360, { duration, easing: Easing.linear }),
-      -1,
-      false
-    );
-  }, []);
-
-  const animStyle = useAnimatedStyle(() => ({
-    transform: [{ rotate: `${angle.value}deg` }],
-  }));
-
-  const dotOffset = (ORBIT_SIZE - ringSize) / 2 - DOT_SIZE / 2;
-
-  return (
-    <Animated.View
-      pointerEvents="none"
-      style={[
-        {
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: ORBIT_SIZE,
-          height: ORBIT_SIZE,
-          alignItems: 'center',
-        },
-        animStyle,
-      ]}
-    >
-      <View
-        style={{
-          width: DOT_SIZE,
-          height: DOT_SIZE,
-          borderRadius: DOT_SIZE / 2,
-          backgroundColor: color,
-          marginTop: dotOffset,
-          shadowColor: color,
-          shadowOpacity: 1,
-          shadowRadius: 8,
-          elevation: 8,
-        }}
-      />
-    </Animated.View>
-  );
-}
-
-function Ring({ size, opacity = 0.3 }: { size: number; opacity?: number }) {
-  const offset = (ORBIT_SIZE - size) / 2;
-  return (
-    <View
-      style={{
-        position: 'absolute',
-        width: size,
-        height: size,
-        borderRadius: size / 2,
-        borderWidth: 1,
-        borderColor: `rgba(139, 92, 246, ${opacity})`,
-        top: offset,
-        left: offset,
-      }}
-    />
-  );
-}
+// Angles where the dot passes "behind" each card (0 = top, clockwise)
+const MARTIN_ANGLE = 50;
+const SOFIA_ANGLE = 230;
+const GLOW_RANGE = 52;
 
 function NeighborCard({
+  address,
   name,
-  detail,
-  style,
+  icon,
+  iconColor,
+  item,
 }: {
+  address: string;
   name: string;
-  detail: string;
-  style?: object;
+  icon: string;
+  iconColor: string;
+  item: string;
 }) {
   return (
-    <View style={[styles.card, style]}>
+    <View style={styles.card}>
+      <Text style={styles.cardAddress}>{address}</Text>
       <Text style={styles.cardName}>{name}</Text>
-      <Text style={styles.cardDetail}>{detail}</Text>
+      <View style={styles.cardItemRow}>
+        <Feather name={icon as any} size={12} color={iconColor} style={{ marginRight: 5 }} />
+        <Text style={styles.cardDetail}>{item}</Text>
+      </View>
     </View>
   );
 }
 
-function PaginationDots({ total = 5, active = 0 }: { total?: number; active?: number }) {
+function StepLines({ total = 3, active = 0 }: { total?: number; active?: number }) {
   return (
     <View style={styles.pagination}>
       {Array.from({ length: total }).map((_, i) => (
         <View
           key={i}
-          style={[styles.paginationDot, i === active && styles.paginationDotActive]}
+          style={[styles.stepLine, i === active ? styles.stepLineActive : styles.stepLineInactive]}
         />
       ))}
     </View>
@@ -134,6 +73,38 @@ function PaginationDots({ total = 5, active = 0 }: { total?: number; active?: nu
 }
 
 export default function LandingScreen() {
+  const angle = useSharedValue(0);
+
+  useEffect(() => {
+    cancelAnimation(angle);
+    angle.value = 0;
+    angle.value = withRepeat(
+      withTiming(360, { duration: 6000, easing: Easing.linear }),
+      -1,
+      false
+    );
+  }, []);
+
+  const dotArmStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${angle.value}deg` }],
+  }));
+
+  const martinGlowStyle = useAnimatedStyle(() => {
+    'worklet';
+    const a = ((angle.value % 360) + 360) % 360;
+    let diff = Math.abs(a - MARTIN_ANGLE);
+    if (diff > 180) diff = 360 - diff;
+    return { shadowOpacity: Math.max(0, 1 - diff / GLOW_RANGE) * 0.9 };
+  });
+
+  const sofiaGlowStyle = useAnimatedStyle(() => {
+    'worklet';
+    const a = ((angle.value % 360) + 360) % 360;
+    let diff = Math.abs(a - SOFIA_ANGLE);
+    if (diff > 180) diff = 360 - diff;
+    return { shadowOpacity: Math.max(0, 1 - diff / GLOW_RANGE) * 0.9 };
+  });
+
   return (
     <View style={styles.container}>
       <SafeAreaView style={styles.safe}>
@@ -143,32 +114,51 @@ export default function LandingScreen() {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.orbitSection}>
-          <View style={{ width: ORBIT_SIZE, height: ORBIT_SIZE }}>
-            <Ring size={RING_2} opacity={0.25} />
-            <Ring size={RING_1} opacity={0.35} />
-            <View style={styles.centerIcon}>
-              <Text style={styles.centerEmoji}>🏠</Text>
-            </View>
-            <OrbitDot ringSize={RING_2} color={BLUE} duration={7000} startAngle={60} />
-            <OrbitDot ringSize={RING_1} color={CYAN} duration={4500} startAngle={300} />
-          </View>
+        <View style={styles.heroSection}>
+          <Text style={styles.orbitTitle}>orbit</Text>
+          <View style={styles.heroMid}>
+          <View style={{ width: SCENE_W, height: SCENE_H }}>
+            {/* Static ring */}
+            <View style={styles.ring} />
 
-          <NeighborCard
-            name="Martín"
-            detail="Piso 8 · Lavarropas libre"
-            style={styles.cardLeft}
-          />
-          <NeighborCard
-            name="Sofía"
-            detail="Piso 11 · Cochera disponible"
-            style={styles.cardRight}
-          />
+            {/* Orbiting dot — rendered before cards so it's behind them */}
+            <Animated.View pointerEvents="none" style={[styles.dotArm, dotArmStyle]}>
+              <View style={styles.dot} />
+            </Animated.View>
+
+            {/* Center house icon */}
+            <View style={styles.centerIcon}>
+              <Feather name="home" size={22} color={PURPLE} />
+            </View>
+
+            {/* Martín — upper right, glows when dot passes behind */}
+            <Animated.View style={[styles.floatCard, { right: 0, top: 5 }, martinGlowStyle]}>
+              <NeighborCard
+                address="Piso 8"
+                name="Martín"
+                icon="tool"
+                iconColor={BLUE}
+                item="Lavarropas libre"
+              />
+            </Animated.View>
+
+            {/* Sofía — lower left, glows when dot passes behind */}
+            <Animated.View style={[styles.floatCard, { left: 0, bottom: 5 }, sofiaGlowStyle]}>
+              <NeighborCard
+                address="Piso 11"
+                name="Sofía"
+                icon="home"
+                iconColor={CYAN}
+                item="Cochera disponible"
+              />
+            </Animated.View>
+          </View>
+          </View>
         </View>
 
         <View style={styles.bottomContent}>
-          <PaginationDots total={5} active={0} />
-          <Text style={styles.eyebrow}>TU EDIFICIO. TU COMUNIDAD.</Text>
+          <StepLines total={3} active={0} />
+          <Text style={styles.eyebrow}>TU CERCANÍA. TU COMUNIDAD.</Text>
           <Text style={styles.headline}>
             La ayuda estaba{' '}
             <Text style={styles.headlineAccent}>más cerca</Text>
@@ -216,51 +206,105 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
   },
-  orbitSection: {
+  heroSection: {
+    flex: 1,
+    alignItems: 'center',
+    paddingTop: 10,
+  },
+  orbitTitle: {
+    fontFamily: 'SpaceGrotesk_700Bold',
+    fontSize: 26,
+    color: '#C4B5FD',
+    letterSpacing: -0.5,
+    marginBottom: 4,
+  },
+  heroMid: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    position: 'relative',
+  },
+  ring: {
+    position: 'absolute',
+    width: RING_SIZE,
+    height: RING_SIZE,
+    borderRadius: RING_SIZE / 2,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.35)',
+    top: (SCENE_H - RING_SIZE) / 2,
+    left: (SCENE_W - RING_SIZE) / 2,
+  },
+  dotArm: {
+    position: 'absolute',
+    top: (SCENE_H - RING_SIZE) / 2,
+    left: (SCENE_W - RING_SIZE) / 2,
+    width: RING_SIZE,
+    height: RING_SIZE,
+    alignItems: 'center',
+  },
+  dot: {
+    width: DOT_SIZE,
+    height: DOT_SIZE,
+    borderRadius: DOT_SIZE / 2,
+    backgroundColor: PURPLE,
+    marginTop: -DOT_SIZE / 2,
+    shadowColor: PURPLE,
+    shadowOpacity: 1,
+    shadowRadius: 6,
+    elevation: 6,
   },
   centerIcon: {
     position: 'absolute',
-    top: (ORBIT_SIZE - CENTER_SIZE) / 2,
-    left: (ORBIT_SIZE - CENTER_SIZE) / 2,
     width: CENTER_SIZE,
     height: CENTER_SIZE,
-    borderRadius: 20,
+    borderRadius: CENTER_SIZE / 2,
     backgroundColor: '#1C1040',
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.4)',
     alignItems: 'center',
     justifyContent: 'center',
+    top: (SCENE_H - CENTER_SIZE) / 2,
+    left: (SCENE_W - CENTER_SIZE) / 2,
+    shadowColor: PURPLE,
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    elevation: 8,
   },
-  centerEmoji: {
-    fontSize: 34,
+  floatCard: {
+    position: 'absolute',
+    width: CARD_W,
+    shadowColor: PURPLE,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 10,
   },
   card: {
-    position: 'absolute',
     backgroundColor: CARD_BG,
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    borderRadius: 14,
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 92, 246, 0.15)',
   },
-  cardLeft: {
-    bottom: '28%',
-    left: 20,
-  },
-  cardRight: {
-    bottom: '14%',
-    left: '34%',
-    zIndex: 1,
+  cardAddress: {
+    color: PURPLE,
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.3,
+    marginBottom: 3,
   },
   cardName: {
     color: '#FFFFFF',
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: '700',
-    marginBottom: 2,
+    marginBottom: 5,
+  },
+  cardItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   cardDetail: {
     color: GRAY,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '500',
   },
   pagination: {
@@ -268,16 +312,16 @@ const styles = StyleSheet.create({
     gap: 6,
     marginBottom: 16,
   },
-  paginationDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+  stepLine: {
+    flex: 1,
+    height: 3,
+    borderRadius: 2,
   },
-  paginationDotActive: {
-    width: 24,
-    borderRadius: 4,
+  stepLineActive: {
     backgroundColor: PURPLE,
+  },
+  stepLineInactive: {
+    backgroundColor: 'rgba(139, 92, 246, 0.18)',
   },
   bottomContent: {
     paddingHorizontal: 24,
