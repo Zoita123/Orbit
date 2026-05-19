@@ -1,5 +1,6 @@
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { router } from 'expo-router';
 import { useEffect } from 'react';
 import { Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Animated, {
@@ -12,7 +13,8 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-const { width: SW } = Dimensions.get('window');
+const { width: SW, height: SH } = Dimensions.get('window');
+const ORBIT_H = Math.round(SH * 0.44);
 
 const BG = '#080A1A';
 const PURPLE = '#8B5CF6';
@@ -26,7 +28,7 @@ const SCENE_W = SW - 40;
 const SCENE_H = 230;
 const RING_SIZE = SCENE_W * 0.46;
 const CENTER_SIZE = 50;
-const CARD_W = Math.round(SCENE_W * 0.52);
+const CARD_W = Math.round(SCENE_W * 0.43);
 const DOT_SIZE = 8;
 
 // Angles where the dot passes "behind" each card (0 = top, clockwise)
@@ -109,9 +111,16 @@ export default function LandingScreen() {
     <View style={styles.container}>
       <SafeAreaView style={styles.safe}>
         <View style={styles.header}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={styles.backButton}>
+            <Feather name="arrow-left" size={20} color={GRAY} />
+          </TouchableOpacity>
           <TouchableOpacity hitSlop={12}>
             <Text style={styles.skipText}>Saltar</Text>
           </TouchableOpacity>
+        </View>
+
+        <View style={styles.stepLinesWrap}>
+          <StepLines total={3} active={0} />
         </View>
 
         <View style={styles.heroSection}>
@@ -134,7 +143,7 @@ export default function LandingScreen() {
             {/* Martín — upper right, glows when dot passes behind */}
             <Animated.View style={[styles.floatCard, { right: 0, top: 5 }, martinGlowStyle]}>
               <NeighborCard
-                address="Piso 8"
+                address="Av. Libertador 2200"
                 name="Martín"
                 icon="tool"
                 iconColor={BLUE}
@@ -145,7 +154,7 @@ export default function LandingScreen() {
             {/* Sofía — lower left, glows when dot passes behind */}
             <Animated.View style={[styles.floatCard, { left: 0, bottom: 5 }, sofiaGlowStyle]}>
               <NeighborCard
-                address="Piso 11"
+                address="Nuñez 1500"
                 name="Sofía"
                 icon="home"
                 iconColor={CYAN}
@@ -157,7 +166,6 @@ export default function LandingScreen() {
         </View>
 
         <View style={styles.bottomContent}>
-          <StepLines total={3} active={0} />
           <Text style={styles.eyebrow}>TU CERCANÍA. TU COMUNIDAD.</Text>
           <Text style={styles.headline}>
             La ayuda estaba{' '}
@@ -165,10 +173,11 @@ export default function LandingScreen() {
             {' '}de lo que creías
           </Text>
           <Text style={styles.body}>
-            Tus vecinos tienen exactamente lo que necesitás. Orbit conecta a todos en el
-            mismo edificio para compartir, alquilar y apoyarse — a metros de tu puerta.
+            Tus vecinos tienen exactamente lo que necesitás. Orbit conecta a todos en la
+            misma zona para compartir, alquilar y apoyarse — a metros de tu puerta.
           </Text>
-          <TouchableOpacity activeOpacity={0.85} style={styles.ctaWrapper}>
+          <View style={{ flex: 1 }} />
+          <TouchableOpacity activeOpacity={0.85} style={styles.ctaWrapper} onPress={() => router.push('/screen2')}>
             <LinearGradient
               colors={['#7C3AED', '#3B82F6']}
               start={{ x: 0, y: 0 }}
@@ -177,9 +186,6 @@ export default function LandingScreen() {
             >
               <Text style={styles.ctaText}>Descubrir cómo →</Text>
             </LinearGradient>
-          </TouchableOpacity>
-          <TouchableOpacity>
-            <Text style={styles.loginText}>Ya tengo cuenta</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -196,18 +202,23 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    alignItems: 'flex-end',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 24,
     paddingTop: 4,
     paddingBottom: 4,
   },
+  backButton: {
+    padding: 4,
+  },
   skipText: {
+    fontFamily: 'Inter_500Medium',
     color: GRAY,
     fontSize: 16,
-    fontWeight: '500',
   },
   heroSection: {
-    flex: 1,
+    height: ORBIT_H,
     alignItems: 'center',
     paddingTop: 10,
   },
@@ -279,38 +290,42 @@ const styles = StyleSheet.create({
   },
   card: {
     backgroundColor: CARD_BG,
-    borderRadius: 14,
-    paddingHorizontal: 13,
-    paddingVertical: 8,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderWidth: 1,
     borderColor: 'rgba(139, 92, 246, 0.15)',
   },
   cardAddress: {
+    fontFamily: 'Inter_600SemiBold',
     color: PURPLE,
-    fontSize: 11,
-    fontWeight: '600',
+    fontSize: 10,
     letterSpacing: 0.3,
-    marginBottom: 3,
+    marginBottom: 2,
   },
   cardName: {
+    fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-    marginBottom: 5,
+    fontSize: 13,
+    marginBottom: 4,
   },
   cardItemRow: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   cardDetail: {
+    fontFamily: 'Inter_500Medium',
     color: GRAY,
-    fontSize: 12,
-    fontWeight: '500',
+    fontSize: 11,
+  },
+  stepLinesWrap: {
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    paddingBottom: 16,
   },
   pagination: {
     flexDirection: 'row',
     gap: 6,
-    marginBottom: 16,
   },
   stepLine: {
     flex: 1,
@@ -324,36 +339,37 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(139, 92, 246, 0.18)',
   },
   bottomContent: {
+    flex: 1,
     paddingHorizontal: 24,
-    paddingBottom: 8,
+    paddingBottom: 24,
   },
   eyebrow: {
+    fontFamily: 'Inter_700Bold',
     color: PURPLE,
     fontSize: 12,
-    fontWeight: '700',
     letterSpacing: 1,
     marginBottom: 10,
   },
   headline: {
+    fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
-    fontSize: 34,
-    fontWeight: '800',
+    fontSize: 30,
     lineHeight: 42,
     marginBottom: 14,
   },
   headlineAccent: {
+    fontFamily: 'Inter_700Bold',
     color: PURPLE,
   },
   body: {
+    fontFamily: 'Inter_400Regular',
     color: BODY,
     fontSize: 15,
     lineHeight: 23,
-    marginBottom: 24,
   },
   ctaWrapper: {
     borderRadius: 16,
     overflow: 'hidden',
-    marginBottom: 14,
   },
   ctaButton: {
     paddingVertical: 18,
@@ -361,14 +377,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   ctaText: {
+    fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
     fontSize: 17,
-    fontWeight: '700',
   },
   loginText: {
+    fontFamily: 'Inter_500Medium',
     color: GRAY,
     fontSize: 15,
-    fontWeight: '500',
     textAlign: 'center',
     paddingVertical: 6,
   },

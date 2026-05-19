@@ -264,15 +264,16 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   orbitSubtitle: {
+    fontFamily: 'Inter_400Regular',
     color: SUBTITLE_COLOR,
     fontSize: 18,
     lineHeight: 27,
     textAlign: 'center',
-    fontWeight: '400',
     paddingHorizontal: 24,
     marginTop: 20,
   },
   orbitSubtitleItalic: {
+    fontFamily: 'Inter_400Regular',
     fontStyle: 'italic',
     color: SUBTITLE_COLOR,
   },
@@ -292,14 +293,14 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   buttonText: {
+    fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: '700',
   },
   buttonArrow: {
+    fontFamily: 'Inter_500Medium',
     color: '#FFFFFF',
     fontSize: 18,
-    fontWeight: '500',
   },
   divider: {
     flexDirection: 'row',
@@ -313,13 +314,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.1)',
   },
   dividerText: {
+    fontFamily: 'Inter_400Regular',
     color: GRAY,
     fontSize: 14,
   },
   loginText: {
+    fontFamily: 'Inter_600SemiBold',
     color: GRAY,
     fontSize: 16,
-    fontWeight: '600',
     textAlign: 'center',
     paddingVertical: 8,
   },
