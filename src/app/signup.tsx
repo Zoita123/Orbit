@@ -1,7 +1,9 @@
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { router } from 'expo-router';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { signInWithGoogle } from '../lib/supabase';
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -88,6 +90,21 @@ function AnimatedOrbitLogo() {
 }
 
 export default function SignupScreen() {
+  const [loading, setLoading] = useState(false);
+
+  const handleGoogleSignIn = async () => {
+    setLoading(true);
+    const { data, error } = await signInWithGoogle();
+    setLoading(false);
+    if (error) {
+      Alert.alert('Error', error.message);
+      return;
+    }
+    if (data?.session) {
+      router.replace('/home');
+    }
+  };
+
   return (
     <View style={styles.container}>
       <SafeAreaView style={styles.safe}>
@@ -101,9 +118,20 @@ export default function SignupScreen() {
           </View>
 
           <View style={styles.buttonsSection}>
-            <TouchableOpacity style={styles.googleButton} activeOpacity={0.8}>
-              <GoogleLogo size={20} />
-              <Text style={styles.googleText}>Continuar con Google</Text>
+            <TouchableOpacity
+              style={styles.googleButton}
+              activeOpacity={0.8}
+              onPress={handleGoogleSignIn}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <>
+                  <GoogleLogo size={20} />
+                  <Text style={styles.googleText}>Continuar con Google</Text>
+                </>
+              )}
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.phoneWrapper} activeOpacity={0.85}>
