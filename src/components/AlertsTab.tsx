@@ -1,0 +1,947 @@
+import { Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import { router } from 'expo-router';
+import { useState } from 'react';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+
+const BG = '#080A1A';
+const CARD_BG = '#13142A';
+const PURPLE = '#8B5CF6';
+const GRAY = '#9CA3AF';
+const BODY = '#6B7280';
+const GREEN = '#10B981';
+
+// ─── Mock data ───────────────────────────────────────────────────────────────
+
+const NOTIFS = [
+  {
+    id: '1',
+    icon: 'package' as const,
+    title: 'Nueva solicitud de alquiler',
+    body: 'María González quiere alquilar tu lavarropas',
+    time: 'hace 5 min',
+    unread: true,
+    color: PURPLE,
+  },
+  {
+    id: '2',
+    icon: 'check-circle' as const,
+    title: 'Reserva confirmada',
+    body: 'Confirmaste el lavarropas para María González el sábado',
+    time: 'hace 20 min',
+    unread: false,
+    color: GREEN,
+  },
+  {
+    id: '3',
+    icon: 'tool' as const,
+    title: 'Tu reserva fue aceptada',
+    body: 'Carlos Rodríguez aceptó prestarte la escalera',
+    time: 'hace 2h',
+    unread: false,
+    color: '#F59E0B',
+  },
+  {
+    id: '4',
+    icon: 'star' as const,
+    title: 'Nueva reseña',
+    body: 'Recibiste 5 estrellas de tu última entrega',
+    time: 'ayer',
+    unread: false,
+    color: '#FBBF24',
+  },
+];
+
+const CHATS = [
+  {
+    id: '1',
+    name: 'María González',
+    initial: 'M',
+    item: 'Lavarropas',
+    lastMessage: 'Hola! ¿Está disponible para el sábado?',
+    time: 'hace 5 min',
+    unread: 1,
+  },
+  {
+    id: '2',
+    name: 'Carlos Rodríguez',
+    initial: 'C',
+    item: 'Escalera',
+    lastMessage: 'Perfecto, nos vemos a las 10 entonces 👍',
+    time: 'hace 3h',
+    unread: 0,
+  },
+];
+
+// ─── Calendar helpers ─────────────────────────────────────────────────────────
+
+function getWeekDays(base: Date): Date[] {
+  const day = base.getDay(); // 0 = Sunday
+  const monday = new Date(base);
+  monday.setDate(base.getDate() - ((day + 6) % 7));
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return d;
+  });
+}
+
+const DAY_LABELS = ['Lu', 'Ma', 'Mi', 'Ju', 'Vi', 'Sá', 'Do'];
+
+const MONTH_ES = [
+  'enero','febrero','marzo','abril','mayo','junio',
+  'julio','agosto','septiembre','octubre','noviembre','diciembre',
+];
+
+function sameDay(a: Date, b: Date) {
+  return a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+}
+
+const today = new Date();
+const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
+const dayAfter = new Date(today); dayAfter.setDate(today.getDate() + 2);
+
+const LEND_COLOR    = GREEN;        // prestás → verde
+const BORROW_COLOR  = '#3B82F6';    // te prestan → azul
+
+type EventType = 'lending' | 'borrowing';
+type DeliveryMethod = 'porteria' | 'espacio_comun' | 'envio' | 'retiro';
+
+type CalEvent = {
+  date: Date;
+  name: string;
+  initial: string;
+  item: string;
+  from: string;
+  to: string;
+  type: EventType;
+  delivery: DeliveryMethod;
+  chatId: string;
+  includes?: string[];
+  programs?: string[];
+  note?: string;
+};
+
+const EVENTS: CalEvent[] = [
+  {
+    date: today, name: 'María González', initial: 'M', chatId: '1',
+    item: 'Lavarropas', from: '10:00', to: '12:00', type: 'lending',
+    delivery: 'porteria',
+    includes: ['Detergente incluido', 'Suavizante incluido'],
+    programs: ['Diario', 'Color'],
+    note: 'Prefiero que lo retiren antes de las 10. Dejar en portería a nombre de González.',
+  },
+  {
+    date: today, name: 'Carlos Rodríguez', initial: 'C', chatId: '2',
+    item: 'Escalera', from: '15:00', to: '17:00', type: 'borrowing',
+    delivery: 'espacio_comun',
+    note: 'La escalera está en el SUM del edificio. Llevar DNI para retirarla.',
+  },
+  {
+    date: tomorrow, name: 'Laura Pérez', initial: 'L', chatId: '1',
+    item: 'Lavarropas', from: '09:00', to: '11:00', type: 'lending',
+    delivery: 'envio',
+    includes: ['Sin detergente — traer el propio'],
+    programs: ['Delicado', 'Lana'],
+    note: 'Coordinar con Rappi o Uber envíos. El equipo está embalado y listo.',
+  },
+  {
+    date: dayAfter, name: 'Juan Torres', initial: 'J', chatId: '2',
+    item: 'Taladro', from: '14:00', to: '16:00', type: 'borrowing',
+    delivery: 'retiro',
+    includes: ['Incluye broca 8mm y 10mm', 'Incluye extensión eléctrica'],
+    note: 'Pasar por departamento 4B. Llamar timbre dos veces.',
+  },
+];
+
+function eventColor(type: EventType) {
+  return type === 'lending' ? LEND_COLOR : BORROW_COLOR;
+}
+
+// ─── Sub-components ──────────────────────────────────────────────────────────
+
+function NotifsSection() {
+  const [read, setRead] = useState<Set<string>>(new Set());
+
+  return (
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.list}>
+      {NOTIFS.map((n) => {
+        const isUnread = n.unread && !read.has(n.id);
+        return (
+          <TouchableOpacity
+            key={n.id}
+            style={[s.notifCard, isUnread && s.notifCardUnread]}
+            activeOpacity={0.75}
+            onPress={() => setRead((prev) => new Set([...prev, n.id]))}
+          >
+            <View style={[s.notifIconWrap, { backgroundColor: `${n.color}20` }]}>
+              <Feather name={n.icon} size={18} color={n.color} />
+            </View>
+            <View style={{ flex: 1, gap: 3 }}>
+              <View style={s.notifTopRow}>
+                <Text style={s.notifTitle}>{n.title}</Text>
+                {isUnread && <View style={s.unreadDot} />}
+              </View>
+              <Text style={s.notifBody}>{n.body}</Text>
+              <Text style={s.notifTime}>{n.time}</Text>
+            </View>
+          </TouchableOpacity>
+        );
+      })}
+      <View style={{ height: 24 }} />
+    </ScrollView>
+  );
+}
+
+function ChatsSection() {
+  return (
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.list}>
+      <Text style={s.sectionLabel}>CONVERSACIONES</Text>
+      {CHATS.map((c) => (
+        <TouchableOpacity
+          key={c.id}
+          style={s.chatCard}
+          activeOpacity={0.75}
+          onPress={() => router.push({ pathname: '/chat', params: { id: c.id } })}
+        >
+          <View style={s.chatAvatar}>
+            <Text style={s.chatAvatarText}>{c.initial}</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <View style={s.chatTopRow}>
+              <Text style={s.chatName}>{c.name}</Text>
+              <Text style={s.chatTime}>{c.time}</Text>
+            </View>
+            <Text style={s.chatItem}>{c.item}</Text>
+            <Text style={s.chatLast} numberOfLines={1}>{c.lastMessage}</Text>
+          </View>
+          {c.unread > 0 && (
+            <View style={s.unreadBadge}>
+              <Text style={s.unreadBadgeText}>{c.unread}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      ))}
+
+      <View style={s.emptyChats}>
+        <Feather name="message-circle" size={28} color={BODY} />
+        <Text style={s.emptyText}>Las nuevas conversaciones{'\n'}aparecerán aquí</Text>
+      </View>
+
+      <View style={{ height: 24 }} />
+    </ScrollView>
+  );
+}
+
+const DELIVERY_INFO: Record<DeliveryMethod, { icon: string; label: string; sub: string }> = {
+  porteria:      { icon: 'inbox',    label: 'Portería del edificio', sub: 'Dejar/retirar en recepción' },
+  espacio_comun: { icon: 'users',    label: 'Espacio común',         sub: 'SUM, hall u otro lugar compartido' },
+  envio:         { icon: 'truck',    label: 'Envío a domicilio',     sub: 'Rappi / Uber Envíos' },
+  retiro:        { icon: 'package',  label: 'Retiro en persona',     sub: 'Coordinar dirección con el dueño' },
+};
+
+function EventDetailModal({ event, onClose }: { event: CalEvent; onClose: () => void }) {
+  const color = eventColor(event.type);
+  const label = event.type === 'lending' ? 'Prestás' : 'Te prestan';
+  const dateStr = `${event.date.getDate()} de ${MONTH_ES[event.date.getMonth()]}`;
+  const delivery = DELIVERY_INFO[event.delivery];
+
+  return (
+    <Modal transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={s.modalBackdrop} onPress={onClose} />
+      <View style={s.modalSheet}>
+        {/* Handle */}
+        <View style={s.modalHandle} />
+
+        {/* Scrollable content */}
+        <ScrollView showsVerticalScrollIndicator={false} bounces={false}>
+
+          {/* Type pill + close */}
+          <View style={s.modalHeader}>
+            <View style={[s.modalTypePill, { backgroundColor: `${color}22` }]}>
+              <View style={[s.modalTypeDot, { backgroundColor: color }]} />
+              <Text style={[s.modalTypeText, { color }]}>{label}</Text>
+            </View>
+            <TouchableOpacity onPress={onClose} hitSlop={12}>
+              <Feather name="x" size={20} color={GRAY} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Item name */}
+          <Text style={s.modalItem}>{event.item}</Text>
+
+          {/* Person row */}
+          <View style={s.modalPersonRow}>
+            <View style={[s.modalAvatar, { borderColor: color }]}>
+              <Text style={[s.modalAvatarText, { color }]}>{event.initial}</Text>
+            </View>
+            <View>
+              <Text style={s.modalPersonLabel}>
+                {event.type === 'lending' ? 'Alquilado por' : 'Dueño del ítem'}
+              </Text>
+              <Text style={s.modalPersonName}>{event.name}</Text>
+            </View>
+          </View>
+
+          {/* Date / time / status */}
+          <View style={s.modalInfoRow}>
+            <View style={s.modalInfoCell}>
+              <Feather name="calendar" size={14} color={BODY} />
+              <Text style={s.modalInfoLabel}>Fecha</Text>
+              <Text style={s.modalInfoValue}>{dateStr}</Text>
+            </View>
+            <View style={s.modalInfoDivider} />
+            <View style={s.modalInfoCell}>
+              <Feather name="clock" size={14} color={BODY} />
+              <Text style={s.modalInfoLabel}>Horario</Text>
+              <Text style={s.modalInfoValue}>{event.from} – {event.to}</Text>
+            </View>
+            <View style={s.modalInfoDivider} />
+            <View style={s.modalInfoCell}>
+              <Feather name="check-circle" size={14} color={GREEN} />
+              <Text style={s.modalInfoLabel}>Estado</Text>
+              <Text style={[s.modalInfoValue, { color: GREEN }]}>Confirmado</Text>
+            </View>
+          </View>
+
+          {/* Includes / programs */}
+          {((event.includes?.length ?? 0) > 0 || (event.programs?.length ?? 0) > 0) && (
+            <View style={s.modalSection}>
+              <Text style={s.modalSectionTitle}>DETALLES DEL ÍTEM</Text>
+              <View style={s.modalDetailCard}>
+                {event.includes?.map((inc, i) => (
+                  <View key={i} style={[s.modalDetailRow, i > 0 && s.modalDetailRowBorder]}>
+                    <Feather name="check" size={14} color={GREEN} />
+                    <Text style={s.modalDetailText}>{inc}</Text>
+                  </View>
+                ))}
+                {event.programs && event.programs.length > 0 && (
+                  <View style={[s.modalDetailRow, (event.includes?.length ?? 0) > 0 && s.modalDetailRowBorder]}>
+                    <Feather name="sliders" size={14} color={PURPLE} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.modalDetailLabel}>Programas disponibles</Text>
+                      <View style={s.modalChipRow}>
+                        {event.programs.map((p) => (
+                          <View key={p} style={s.modalChip}>
+                            <Text style={s.modalChipText}>{p}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    </View>
+                  </View>
+                )}
+              </View>
+            </View>
+          )}
+
+          {/* Delivery method */}
+          <View style={s.modalSection}>
+            <Text style={s.modalSectionTitle}>MÉTODO DE ENTREGA</Text>
+            <View style={s.modalDeliveryCard}>
+              <View style={s.modalDeliveryIcon}>
+                <Feather name={delivery.icon as any} size={20} color={PURPLE} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={s.modalDeliveryLabel}>{delivery.label}</Text>
+                <Text style={s.modalDeliverySub}>{delivery.sub}</Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Note from other party */}
+          {event.note && (
+            <View style={s.modalSection}>
+              <Text style={s.modalSectionTitle}>MENSAJE DE {event.name.split(' ')[0].toUpperCase()}</Text>
+              <View style={s.modalNoteCard}>
+                <Feather name="message-square" size={14} color={BODY} style={{ marginTop: 1 }} />
+                <Text style={s.modalNoteText}>{event.note}</Text>
+              </View>
+            </View>
+          )}
+
+          <View style={{ height: 8 }} />
+        </ScrollView>
+
+        {/* Actions — always visible outside scroll */}
+        <View style={[s.modalActions, { paddingTop: 16 }]}>
+          <TouchableOpacity style={s.modalBtnCancel} activeOpacity={0.75}>
+            <Feather name="x-circle" size={16} color="#F87171" />
+            <Text style={s.modalBtnCancelText}>Cancelar</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={s.modalBtnEdit} activeOpacity={0.75}>
+            <Feather name="edit-2" size={16} color={GRAY} />
+            <Text style={s.modalBtnEditText}>Modificar</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={s.modalBtnChatWrap}
+            activeOpacity={0.85}
+            onPress={() => { onClose(); router.push({ pathname: '/chat', params: { id: event.chatId } }); }}
+          >
+            <LinearGradient
+              colors={['#7C3AED', '#3B82F6']}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+              style={s.modalBtnChat}
+            >
+              <Feather name="message-circle" size={16} color="#FFF" />
+              <Text style={s.modalBtnChatText}>Chatear</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function CalendarSection() {
+  const [selectedDate, setSelectedDate] = useState(today);
+  const [activeEvent, setActiveEvent] = useState<CalEvent | null>(null);
+  const [weekBase, setWeekBase] = useState(today);
+
+  const week = getWeekDays(weekBase);
+  const monthLabel = `${MONTH_ES[week[0].getMonth()]} ${week[0].getFullYear()}`;
+
+  const dayEvents = EVENTS.filter((e) => sameDay(e.date, selectedDate));
+
+  const prevWeek = () => {
+    const d = new Date(weekBase);
+    d.setDate(weekBase.getDate() - 7);
+    setWeekBase(d);
+  };
+  const nextWeek = () => {
+    const d = new Date(weekBase);
+    d.setDate(weekBase.getDate() + 7);
+    setWeekBase(d);
+  };
+
+  return (
+    <>
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.list}>
+      {/* Month header */}
+      <View style={s.calMonthRow}>
+        <TouchableOpacity onPress={prevWeek} hitSlop={12}>
+          <Feather name="chevron-left" size={20} color={GRAY} />
+        </TouchableOpacity>
+        <Text style={s.calMonthLabel}>{monthLabel}</Text>
+        <TouchableOpacity onPress={nextWeek} hitSlop={12}>
+          <Feather name="chevron-right" size={20} color={GRAY} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Week strip */}
+      <View style={s.weekStrip}>
+        {week.map((d, i) => {
+          const isSelected = sameDay(d, selectedDate);
+          const isToday = sameDay(d, today);
+          const isPast = !isToday && d < today;
+          const hasEvent = EVENTS.some((e) => sameDay(e.date, d));
+          return (
+            <TouchableOpacity
+              key={i}
+              style={[s.dayCell, isSelected && s.dayCellSelected, isPast && s.dayCellPast]}
+              activeOpacity={0.7}
+              onPress={() => setSelectedDate(d)}
+            >
+              <Text style={[s.dayLabel, isSelected && s.dayLabelSelected, isPast && s.dayLabelPast]}>{DAY_LABELS[i]}</Text>
+              <Text style={[s.dayNum, isToday && s.dayNumToday, isSelected && s.dayNumSelected, isPast && s.dayNumPast]}>
+                {d.getDate()}
+              </Text>
+              <View style={[s.eventDot, hasEvent ? (isSelected ? s.eventDotSelected : s.eventDotVisible) : s.eventDotHidden]} />
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {/* Events for selected day */}
+      <Text style={s.sectionLabel}>
+        {sameDay(selectedDate, today)
+          ? 'HOY'
+          : sameDay(selectedDate, tomorrow)
+            ? 'MAÑANA'
+            : `${selectedDate.getDate()} DE ${MONTH_ES[selectedDate.getMonth()].toUpperCase()}`}
+      </Text>
+
+      {/* Legend */}
+      <View style={s.legend}>
+        <View style={s.legendItem}>
+          <View style={[s.legendDot, { backgroundColor: LEND_COLOR }]} />
+          <Text style={s.legendText}>Prestás</Text>
+        </View>
+        <View style={s.legendItem}>
+          <View style={[s.legendDot, { backgroundColor: BORROW_COLOR }]} />
+          <Text style={s.legendText}>Te prestan</Text>
+        </View>
+      </View>
+
+      {dayEvents.length === 0 ? (
+        <View style={s.noEvents}>
+          <Feather name="calendar" size={26} color={BODY} />
+          <Text style={s.noEventsText}>Sin reservas este día</Text>
+        </View>
+      ) : (
+        dayEvents.map((ev, i) => {
+          const color = eventColor(ev.type);
+          const label = ev.type === 'lending' ? 'Prestás' : 'Te prestan';
+          return (
+            <TouchableOpacity
+              key={i}
+              style={[s.eventCard, { borderLeftColor: color }]}
+              activeOpacity={0.75}
+              onPress={() => setActiveEvent(ev)}
+            >
+              <View style={[s.eventStripe, { backgroundColor: color }]} />
+              <View style={{ flex: 1, paddingLeft: 6 }}>
+                <View style={s.eventTopRow}>
+                  <Text style={s.eventName}>{ev.name}</Text>
+                  <View style={[s.eventTypePill, { backgroundColor: `${color}22` }]}>
+                    <Text style={[s.eventTypeText, { color }]}>{label}</Text>
+                  </View>
+                </View>
+                <Text style={s.eventItem}>{ev.item}</Text>
+              </View>
+              <View style={s.eventTime}>
+                <Text style={[s.eventTimeText, { color }]}>{ev.from}</Text>
+                <Text style={s.eventTimeSep}>–</Text>
+                <Text style={[s.eventTimeText, { color }]}>{ev.to}</Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })
+      )}
+
+      <View style={{ height: 24 }} />
+    </ScrollView>
+
+    {activeEvent && (
+      <EventDetailModal event={activeEvent} onClose={() => setActiveEvent(null)} />
+    )}
+    </>
+  );
+}
+
+// ─── Main export ─────────────────────────────────────────────────────────────
+
+type SubTab = 'notifs' | 'chats' | 'cal';
+
+export default function AlertsTab() {
+  const [sub, setSub] = useState<SubTab>('notifs');
+
+  const unreadCount = NOTIFS.filter((n) => n.unread).length;
+
+  return (
+    <View style={{ flex: 1 }}>
+      {/* Sub-tab bar */}
+      <View style={s.subBar}>
+        {([
+          { key: 'notifs', label: 'Notificaciones', badge: unreadCount },
+          { key: 'chats',  label: 'Chats',          badge: CHATS.filter(c => c.unread > 0).length },
+          { key: 'cal',    label: 'Calendario',     badge: 0 },
+        ] as { key: SubTab; label: string; badge: number }[]).map((t) => (
+          <TouchableOpacity
+            key={t.key}
+            style={[s.subTab, sub === t.key && s.subTabActive]}
+            activeOpacity={0.7}
+            onPress={() => setSub(t.key)}
+          >
+            <Text style={[s.subTabText, sub === t.key && s.subTabTextActive]}>{t.label}</Text>
+            {t.badge > 0 && (
+              <View style={s.subTabBadge}>
+                <Text style={s.subTabBadgeText}>{t.badge}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {sub === 'notifs' && <NotifsSection />}
+      {sub === 'chats'  && <ChatsSection />}
+      {sub === 'cal'    && <CalendarSection />}
+    </View>
+  );
+}
+
+// ─── Styles ──────────────────────────────────────────────────────────────────
+
+const s = StyleSheet.create({
+  list: { paddingHorizontal: 20, paddingTop: 16 },
+
+  subBar: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+  },
+  subTab: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    backgroundColor: CARD_BG,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  subTabActive: {
+    backgroundColor: 'rgba(139,92,246,0.2)',
+    borderColor: PURPLE,
+  },
+  subTabText: { fontFamily: 'Inter_500Medium', color: BODY, fontSize: 13 },
+  subTabTextActive: { color: '#C4B5FD', fontFamily: 'Inter_600SemiBold' },
+  subTabBadge: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: PURPLE,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  subTabBadgeText: { fontFamily: 'Inter_700Bold', color: '#FFF', fontSize: 10 },
+
+  // Notifications
+  notifCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 14,
+    backgroundColor: CARD_BG,
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  notifCardUnread: {
+    borderColor: 'rgba(139,92,246,0.3)',
+    backgroundColor: 'rgba(139,92,246,0.07)',
+  },
+  notifIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  notifTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  notifTitle: { fontFamily: 'Inter_600SemiBold', color: '#FFFFFF', fontSize: 14, flex: 1 },
+  notifBody: { fontFamily: 'Inter_400Regular', color: GRAY, fontSize: 13, lineHeight: 18 },
+  notifTime: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 12 },
+  unreadDot: {
+    width: 8, height: 8, borderRadius: 4,
+    backgroundColor: PURPLE, marginLeft: 6, marginTop: 2,
+  },
+
+  // Chats
+  sectionLabel: {
+    fontFamily: 'Inter_700Bold',
+    color: BODY,
+    fontSize: 11,
+    letterSpacing: 1.2,
+    marginBottom: 12,
+  },
+  chatCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    backgroundColor: CARD_BG,
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  chatAvatar: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: 'rgba(139,92,246,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatAvatarText: { fontFamily: 'Inter_700Bold', color: '#C4B5FD', fontSize: 18 },
+  chatTopRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 },
+  chatName: { fontFamily: 'Inter_600SemiBold', color: '#FFFFFF', fontSize: 15 },
+  chatTime: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 12 },
+  chatItem: { fontFamily: 'Inter_400Regular', color: PURPLE, fontSize: 12, marginBottom: 3 },
+  chatLast: { fontFamily: 'Inter_400Regular', color: GRAY, fontSize: 13 },
+  unreadBadge: {
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: PURPLE, alignItems: 'center', justifyContent: 'center',
+  },
+  unreadBadgeText: { fontFamily: 'Inter_700Bold', color: '#FFF', fontSize: 11 },
+  emptyChats: {
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 28,
+    opacity: 0.5,
+  },
+  emptyText: {
+    fontFamily: 'Inter_400Regular', color: BODY, fontSize: 13,
+    textAlign: 'center', lineHeight: 20,
+  },
+
+  // Calendar
+  calMonthRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  calMonthLabel: {
+    fontFamily: 'Inter_600SemiBold',
+    color: '#FFFFFF',
+    fontSize: 16,
+    textTransform: 'capitalize',
+  },
+  weekStrip: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 24,
+  },
+  dayCell: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: CARD_BG,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  dayCellSelected: {
+    backgroundColor: 'rgba(139,92,246,0.2)',
+    borderColor: PURPLE,
+  },
+  dayCellPast: { opacity: 0.4 },
+  dayLabel: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 11 },
+  dayLabelSelected: { color: '#C4B5FD' },
+  dayLabelPast: { color: BODY },
+  dayNum: { fontFamily: 'Inter_700Bold', color: GRAY, fontSize: 16 },
+  dayNumToday: { color: PURPLE },
+  dayNumSelected: { color: '#FFFFFF' },
+  dayNumPast: { color: BODY },
+  eventDot: {
+    width: 5, height: 5, borderRadius: 3,
+  },
+  eventDotHidden: { backgroundColor: 'transparent' },
+  eventDotVisible: { backgroundColor: PURPLE },
+  eventDotSelected: { backgroundColor: '#FFFFFF' },
+  noEvents: { alignItems: 'center', gap: 10, paddingVertical: 32, opacity: 0.5 },
+  noEventsText: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 13 },
+  eventCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    backgroundColor: CARD_BG,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+    overflow: 'hidden',
+  },
+  eventStripe: {
+    width: 4,
+    height: '100%' as any,
+    borderRadius: 4,
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+  },
+  eventTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 },
+  eventName: { fontFamily: 'Inter_600SemiBold', color: '#FFFFFF', fontSize: 14, flex: 1 },
+  eventTypePill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    marginLeft: 8,
+  },
+  eventTypeText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
+  eventItem: { fontFamily: 'Inter_400Regular', color: GRAY, fontSize: 13, marginTop: 0 },
+  eventTime: { alignItems: 'flex-end', gap: 1, marginLeft: 8 },
+  eventTimeText: { fontFamily: 'Inter_700Bold', fontSize: 14 },
+  eventTimeSep: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 11 },
+
+  legend: {
+    flexDirection: 'row',
+    gap: 16,
+    marginBottom: 16,
+  },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  legendDot: { width: 8, height: 8, borderRadius: 4 },
+  legendText: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 12 },
+
+  // Modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  modalSheet: {
+    backgroundColor: '#0F1128',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    paddingHorizontal: 24,
+    paddingBottom: 36,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  modalHandle: {
+    width: 40, height: 4, borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignSelf: 'center',
+    marginBottom: 20,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  modalTypePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 20,
+  },
+  modalTypeDot: { width: 7, height: 7, borderRadius: 4 },
+  modalTypeText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  modalItem: {
+    fontFamily: 'Inter_700Bold',
+    color: '#FFFFFF',
+    fontSize: 24,
+    marginBottom: 20,
+  },
+  modalPersonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginBottom: 24,
+  },
+  modalAvatar: {
+    width: 48, height: 48, borderRadius: 24,
+    backgroundColor: 'rgba(139,92,246,0.15)',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 2,
+  },
+  modalAvatarText: { fontFamily: 'Inter_700Bold', fontSize: 20 },
+  modalPersonLabel: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 12, marginBottom: 2 },
+  modalPersonName: { fontFamily: 'Inter_600SemiBold', color: '#FFFFFF', fontSize: 16 },
+  modalInfoRow: {
+    flexDirection: 'row',
+    backgroundColor: CARD_BG,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.07)',
+    padding: 16,
+    marginBottom: 28,
+  },
+  modalInfoCell: { flex: 1, alignItems: 'center', gap: 5 },
+  modalInfoDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.07)' },
+  modalInfoLabel: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 11 },
+  modalInfoValue: { fontFamily: 'Inter_700Bold', color: '#FFFFFF', fontSize: 13, textAlign: 'center' },
+  modalActions: { flexDirection: 'row', gap: 10 },
+  modalBtnCancel: {
+    flex: 1,
+    height: 50,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(248,113,113,0.35)',
+    backgroundColor: 'rgba(248,113,113,0.08)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  modalBtnCancelText: { fontFamily: 'Inter_600SemiBold', color: '#F87171', fontSize: 14 },
+  modalBtnEdit: {
+    flex: 1,
+    height: 50,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    backgroundColor: CARD_BG,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  modalBtnEditText: { fontFamily: 'Inter_600SemiBold', color: GRAY, fontSize: 14 },
+  modalBtnChatWrap: { flex: 1, borderRadius: 14, overflow: 'hidden' },
+  modalBtnChat: {
+    height: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  modalBtnChatText: { fontFamily: 'Inter_700Bold', color: '#FFF', fontSize: 14 },
+
+  modalSection: { marginBottom: 18 },
+  modalSectionTitle: {
+    fontFamily: 'Inter_700Bold', color: BODY,
+    fontSize: 10, letterSpacing: 1.2, marginBottom: 8,
+  },
+  modalDetailCard: {
+    backgroundColor: CARD_BG,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.07)',
+    overflow: 'hidden',
+  },
+  modalDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  modalDetailRowBorder: { borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)' },
+  modalDetailText: { fontFamily: 'Inter_400Regular', color: '#FFFFFF', fontSize: 14, flex: 1 },
+  modalDetailLabel: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 12, marginBottom: 8 },
+  modalChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  modalChip: {
+    paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: 'rgba(139,92,246,0.15)',
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.25)',
+  },
+  modalChipText: { fontFamily: 'Inter_500Medium', color: '#C4B5FD', fontSize: 12 },
+
+  modalDeliveryCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    backgroundColor: CARD_BG,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.07)',
+    padding: 14,
+  },
+  modalDeliveryIcon: {
+    width: 42, height: 42, borderRadius: 12,
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  modalDeliveryLabel: { fontFamily: 'Inter_600SemiBold', color: '#FFFFFF', fontSize: 14, marginBottom: 3 },
+  modalDeliverySub: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 12 },
+
+  modalNoteCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: CARD_BG,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.07)',
+    padding: 14,
+  },
+  modalNoteText: { fontFamily: 'Inter_400Regular', color: GRAY, fontSize: 13, lineHeight: 19, flex: 1 },
+});

@@ -64,6 +64,42 @@ export default function RootLayout() {
               animationDuration: 400,
             }}
           />
+          <Stack.Screen
+            name="item/[id]"
+            options={{
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
+            name="add-item"
+            options={{
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
+            name="profile-setup"
+            options={{
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
+            name="availability"
+            options={{
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
+            name="reserve"
+            options={{
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
+            name="chat"
+            options={{
+              animation: 'slide_from_right',
+            }}
+          />
         </Stack>
       </ThemeProvider>
     </GestureHandlerRootView>

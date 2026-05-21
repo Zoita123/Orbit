@@ -18,6 +18,113 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   },
 });
 
+export async function fetchItems() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: [], error: null };
+
+  return supabase
+    .from('items')
+    .select('*')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false });
+}
+
+export async function addItem(item) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: null, error: new Error('No autenticado') };
+
+  return supabase
+    .from('items')
+    .insert({ ...item, user_id: user.id })
+    .select()
+    .single();
+}
+
+export async function fetchItemById(id) {
+  return supabase.from('items').select('*').eq('id', id).single();
+}
+
+export async function deleteItem(id) {
+  return supabase.from('items').delete().eq('id', id);
+}
+
+export async function fetchProfile() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: null, error: null };
+  const { data, error } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+  if (error?.code === 'PGRST116') return { data: null, error: null }; // no row yet
+  return { data, error };
+}
+
+export async function upsertProfile(profile) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: null, error: new Error('No autenticado') };
+  return supabase
+    .from('profiles')
+    .upsert({ ...profile, id: user.id, updated_at: new Date().toISOString() })
+    .select()
+    .single();
+}
+
+export async function fetchConversation(conversationId) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: null, error: null };
+  return supabase
+    .from('conversations')
+    .select('*, item:item_id(name), owner:owner_id(nombre, apellido), borrower:borrower_id(nombre, apellido)')
+    .eq('id', conversationId)
+    .single();
+}
+
+export async function fetchConversations() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: [], error: null };
+  return supabase
+    .from('conversations')
+    .select('*, item:item_id(name), owner:owner_id(nombre, apellido), borrower:borrower_id(nombre, apellido), messages(content, created_at, read, sender_id)')
+    .or(`owner_id.eq.${user.id},borrower_id.eq.${user.id}`)
+    .order('created_at', { ascending: false });
+}
+
+export async function fetchOrCreateConversation(itemId, ownerId) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: null, error: new Error('No autenticado') };
+
+  const { data: existing } = await supabase
+    .from('conversations')
+    .select('*')
+    .eq('item_id', itemId)
+    .eq('owner_id', ownerId)
+    .eq('borrower_id', user.id)
+    .maybeSingle();
+
+  if (existing) return { data: existing, error: null };
+
+  return supabase
+    .from('conversations')
+    .insert({ item_id: itemId, owner_id: ownerId, borrower_id: user.id })
+    .select()
+    .single();
+}
+
+export async function fetchMessages(conversationId) {
+  return supabase
+    .from('messages')
+    .select('*')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: true });
+}
+
+export async function sendMessage(conversationId, content, type = 'text') {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: null, error: new Error('No autenticado') };
+  return supabase
+    .from('messages')
+    .insert({ conversation_id: conversationId, sender_id: user.id, content, type })
+    .select()
+    .single();
+}
+
 export async function signInWithGoogle() {
   const redirectTo = makeRedirectUri({ scheme: 'orbitapp', path: 'auth/callback' });
 
