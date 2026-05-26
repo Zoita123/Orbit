@@ -44,6 +44,15 @@ export async function fetchItemById(id) {
   return supabase.from('items').select('*').eq('id', id).single();
 }
 
+export async function updateItem(id, item) {
+  return supabase
+    .from('items')
+    .update(item)
+    .eq('id', id)
+    .select()
+    .single();
+}
+
 export async function deleteItem(id) {
   return supabase.from('items').delete().eq('id', id);
 }
@@ -123,6 +132,159 @@ export async function sendMessage(conversationId, content, type = 'text') {
     .insert({ conversation_id: conversationId, sender_id: user.id, content, type })
     .select()
     .single();
+}
+
+export async function createReservation({ conversationId, itemId, ownerId, date, timeFrom, timeTo, deliveryMethod, program, status = 'pending' }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: null, error: new Error('No autenticado') };
+  return supabase
+    .from('reservations')
+    .insert({
+      conversation_id: conversationId,
+      item_id: itemId,
+      owner_id: ownerId,
+      borrower_id: user.id,
+      date,
+      time_from: timeFrom,
+      time_to: timeTo,
+      delivery_method: deliveryMethod,
+      program,
+      status,
+    })
+    .select()
+    .single();
+}
+
+export async function acceptReservation(reservationId) {
+  return supabase
+    .from('reservations')
+    .update({ status: 'confirmed' })
+    .eq('id', reservationId)
+    .select('id, conversation_id, borrower_id, item_id, date, time_from, time_to, program')
+    .single();
+}
+
+export async function rejectReservation(reservationId) {
+  return supabase
+    .from('reservations')
+    .update({ status: 'rejected' })
+    .eq('id', reservationId)
+    .select('id, borrower_id, item_id, date, time_from, item:item_id(name)')
+    .single();
+}
+
+export async function createNotification({ userId, type, reservationId, title, body }) {
+  return supabase
+    .from('notifications')
+    .insert({ user_id: userId, type, reservation_id: reservationId, title, body })
+    .select()
+    .single();
+}
+
+export async function fetchReservations() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: [], error: null };
+  return supabase
+    .from('reservations')
+    .select('*, item:item_id(name, icon), owner:owner_id(nombre, apellido), borrower:borrower_id(nombre, apellido)')
+    .or(`owner_id.eq.${user.id},borrower_id.eq.${user.id}`)
+    .eq('status', 'confirmed')
+    .order('date', { ascending: true });
+}
+
+export async function fetchNotifications() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: [], error: null };
+  return supabase
+    .from('notifications')
+    .select('*, reservation:reservation_id(id, date, time_from, time_to, program, delivery_method, conversation_id, borrower_id, owner_id, status, item:item_id(name), borrower:borrower_id(nombre, apellido))')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false });
+}
+
+export async function markNotificationRead(id) {
+  return supabase.from('notifications').update({ read: true }).eq('id', id);
+}
+
+export async function updateUserLocation(lat, lng) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return;
+  await supabase
+    .from('profiles')
+    .upsert({ id: user.id, lat, lng, updated_at: new Date().toISOString() });
+}
+
+export async function fetchNeighborItems(query = '') {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: [], error: null };
+
+  let q = supabase
+    .from('items')
+    .select('*, owner:user_id(id, nombre, apellido, lat, lng), reservations(time_from, time_to, date, status)')
+    .neq('user_id', user.id)
+    .order('created_at', { ascending: false });
+
+  if (query.trim()) {
+    q = q.ilike('name', `%${query.trim()}%`);
+  }
+
+  const { data, error } = await q;
+  if (!data) return { data: [], error };
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const now = new Date();
+  const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+  const annotated = data.map((item) => {
+    const todayRes = (item.reservations ?? []).filter(
+      (r) => r.date === todayStr && r.status === 'confirmed'
+    );
+    const activeNow = todayRes.find((r) => r.time_from <= nowTime && r.time_to > nowTime) ?? null;
+    const nextBusy = todayRes
+      .filter((r) => r.time_from > nowTime)
+      .sort((a, b) => a.time_from.localeCompare(b.time_from))[0] ?? null;
+    return {
+      ...item,
+      busyUntil: activeNow?.time_to ?? null,
+      nextBusy: nextBusy?.time_from ?? null,
+    };
+  });
+
+  return { data: annotated, error };
+}
+
+export async function fetchItemDayReservations(itemId, date) {
+  return supabase
+    .from('reservations')
+    .select('time_from, time_to')
+    .eq('item_id', itemId)
+    .eq('date', date)
+    .eq('status', 'confirmed');
+}
+
+export async function fetchItemReservations(itemId) {
+  const today = new Date().toISOString().split('T')[0];
+  return supabase
+    .from('reservations')
+    .select('*, borrower:borrower_id(nombre, apellido)')
+    .eq('item_id', itemId)
+    .eq('status', 'confirmed')
+    .gte('date', today)
+    .order('date', { ascending: true })
+    .order('time_from', { ascending: true });
+}
+
+export async function checkConflict(itemId, date, timeFrom, timeTo) {
+  const { data, error } = await supabase
+    .from('reservations')
+    .select('id, time_from, time_to')
+    .eq('item_id', itemId)
+    .eq('date', date)
+    .eq('status', 'confirmed')
+    .lt('time_from', timeTo)
+    .gt('time_to', timeFrom);
+  if (error) return { conflict: false, slots: [], error };
+  return { conflict: (data?.length ?? 0) > 0, slots: data ?? [], error: null };
 }
 
 export async function signInWithGoogle() {

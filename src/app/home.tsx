@@ -1,4 +1,4 @@
-import { Feather } from '@expo/vector-icons';
+import { AntDesign, Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import AlertsTab from '../components/AlertsTab';
 import PlanetRank, { getPlanet, PlanetIcon, PLANETS } from '../components/PlanetRank';
 import SearchTab from '../components/SearchTab';
+import { useLocation } from '../hooks/useLocation';
 import { fetchItems, fetchProfile, supabase } from '../lib/supabase';
 
 const BG = '#080A1A';
@@ -26,6 +27,14 @@ const GRAY = '#9CA3AF';
 const BODY = '#6B7280';
 
 const AVATAR_SIZE = 96;
+
+const MOCK_RATING = 5.0; // Change this value to test different ratings and the low rating modal
+
+function starColor(r: number) {
+  if (r >= 4) return '#F59E0B';
+  if (r >= 3) return '#F97316';
+  return '#EF4444';
+}
 
 const DAY_ORDER = ['lun', 'mar', 'mie', 'jue', 'vie', 'sab', 'dom'];
 const DAY_SHORT: Record<string, string> = { lun: 'Lun', mar: 'Mar', mie: 'Mié', jue: 'Jue', vie: 'Vie', sab: 'Sáb', dom: 'Dom' };
@@ -61,6 +70,47 @@ function scheduleLabel(schedule: any): string {
       : `${enabled.slice(0, 2).map((d) => DAY_SHORT[d]).join(', ')} +${enabled.length - 2}`;
 
   return `${daysStr} · ${timeStr}`;
+}
+
+// ─── Low rating modal ─────────────────────────────────────────────────────────
+
+function LowRatingModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const tips = [
+    { icon: 'message-circle', text: 'Respondé rápido a los mensajes de tus vecinos' },
+    { icon: 'clock',          text: 'Cumplí con los horarios acordados en cada reserva' },
+    { icon: 'package',        text: 'Entregá tus ítems en buen estado y limpios' },
+    { icon: 'star',           text: 'Pedí reseñas a quienes ya te prestaron algo' },
+    { icon: 'user-check',     text: 'Completá tu perfil con toda la información' },
+  ];
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={lm.overlay}>
+        <TouchableOpacity style={lm.backdrop} onPress={onClose} activeOpacity={1} />
+        <View style={lm.sheet}>
+          <View style={lm.handle} />
+          <View style={lm.header}>
+            <View>
+              <Text style={lm.title}>Mejorá tu reputación</Text>
+              <Text style={lm.sub}>Seguí estos consejos para subir tu calificación</Text>
+            </View>
+            <TouchableOpacity onPress={onClose} style={lm.closeBtn} activeOpacity={0.7}>
+              <Feather name="x" size={18} color={GRAY} />
+            </TouchableOpacity>
+          </View>
+          {tips.map((t, i) => (
+            <View key={i} style={[lm.tipRow, i > 0 && { borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.05)' }]}>
+              <View style={lm.tipIconWrap}>
+                <Feather name={t.icon as any} size={16} color="#EF4444" />
+              </View>
+              <Text style={lm.tipText}>{t.text}</Text>
+            </View>
+          ))}
+          <View style={{ height: 24 }} />
+        </View>
+      </View>
+    </Modal>
+  );
 }
 
 // ─── Planet home card (compact widget) ──────────────────────────────────────
@@ -203,7 +253,7 @@ function PlanetBenefitsModal({
 
 // ─── Profile tab ────────────────────────────────────────────────────────────
 
-function ProfileTab({ user, profile }: { user: any; profile: any }) {
+function ProfileTab({ user, profile, itemCount }: { user: any; profile: any; itemCount: number }) {
   const loading = user === undefined;
 
   if (loading) {
@@ -264,6 +314,25 @@ function ProfileTab({ user, profile }: { user: any; profile: any }) {
             <Text style={pf.verifiedPillText}>Perfil verificado</Text>
           </View>
         )}
+      </View>
+
+      {/* Stats */}
+      <View style={pf.statsRow}>
+        <View style={pf.statCard}>
+          <Text style={pf.statValue}>$4.800</Text>
+          <Text style={pf.statLabel}>Este mes</Text>
+        </View>
+        <View style={pf.statCard}>
+          <Text style={pf.statValue}>{itemCount}</Text>
+          <Text style={pf.statLabel}>Productos</Text>
+        </View>
+        <View style={pf.statCard}>
+          <View style={pf.statRatingRow}>
+            <Text style={pf.statValue}>{MOCK_RATING.toFixed(1)}</Text>
+            <AntDesign name="star" size={14} color={starColor(MOCK_RATING)} style={{ marginTop: 2 }} />
+          </View>
+          <Text style={pf.statLabel}>Reputación</Text>
+        </View>
       </View>
 
       {/* Planet rank */}
@@ -352,6 +421,7 @@ const TABS = [
 type TabKey = typeof TABS[number]['key'];
 
 export default function HomeScreen() {
+  const userCoords = useLocation();
   const [activeTab, setActiveTab] = useState<TabKey>('home');
   const [authUser, setAuthUser] = useState<any>(null);
   const [userName, setUserName] = useState('');
@@ -361,6 +431,7 @@ export default function HomeScreen() {
   const [schedule, setSchedule] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
   const [planetModalVisible, setPlanetModalVisible] = useState(false);
+  const [lowRatingVisible, setLowRatingVisible] = useState(false);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -397,9 +468,12 @@ export default function HomeScreen() {
       <SafeAreaView style={styles.safe} edges={['top']}>
         <View style={styles.header}>
           <Text style={styles.logo}>orbit</Text>
-          <TouchableOpacity style={styles.notifBtn}>
-            <Feather name="bell" size={20} color={GRAY} />
-          </TouchableOpacity>
+          {activeTab !== 'alerts' && (
+            <TouchableOpacity style={styles.notifBtn} onPress={() => setActiveTab('alerts')}>
+              <Feather name="bell" size={20} color={GRAY} />
+            </TouchableOpacity>
+          )}
+          {activeTab === 'alerts' && <View style={{ width: 28 }} />}
         </View>
 
         {/* ── Home content ── */}
@@ -409,7 +483,20 @@ export default function HomeScreen() {
               <Text style={styles.greetingSub}>{greeting()},</Text>
               <View style={styles.greetingNameRow}>
                 <Text style={styles.greetingName}>{userName}</Text>
-                <Feather name="smile" size={26} color="#C4B5FD" />
+                <TouchableOpacity
+                  style={styles.starBadge}
+                  activeOpacity={MOCK_RATING < 3 ? 0.7 : 1}
+                  onPress={() => MOCK_RATING < 3 && setLowRatingVisible(true)}
+                >
+                  <Text style={[styles.starValue, { color: starColor(MOCK_RATING) }]}>
+                    {MOCK_RATING.toFixed(1)}
+                  </Text>
+                  <AntDesign
+                    name={(MOCK_RATING >= 3 ? 'star' : 'staro') as any}
+                    size={20}
+                    color={starColor(MOCK_RATING)}
+                  />
+                </TouchableOpacity>
               </View>
             </View>
 
@@ -448,24 +535,6 @@ export default function HomeScreen() {
               </View>
               <Feather name="chevron-right" size={18} color={BODY} />
             </TouchableOpacity>
-
-            <View style={styles.statsRow}>
-              <View style={styles.statCard}>
-                <Text style={styles.statValue}>$4.800</Text>
-                <Text style={styles.statLabel}>Este mes</Text>
-              </View>
-              <View style={styles.statCard}>
-                <Text style={styles.statValue}>7</Text>
-                <Text style={styles.statLabel}>Reservas</Text>
-              </View>
-              <View style={styles.statCard}>
-                <View style={styles.statRatingRow}>
-                  <Text style={styles.statValue}>4.9</Text>
-                  <Feather name="star" size={14} color={PURPLE} style={{ marginTop: 2 }} />
-                </View>
-                <Text style={styles.statLabel}>Reputación</Text>
-              </View>
-            </View>
 
             <PlanetHomeCard points={85} onPress={() => setPlanetModalVisible(true)} />
 
@@ -520,10 +589,10 @@ export default function HomeScreen() {
         )}
 
         {/* ── Profile content ── */}
-        {activeTab === 'profile' && <ProfileTab user={authUser} profile={profile} />}
+        {activeTab === 'profile' && <ProfileTab user={authUser} profile={profile} itemCount={items.length} />}
 
         {/* ── Reserve tab ── */}
-        {activeTab === 'search' && <SearchTab />}
+        {activeTab === 'search' && <SearchTab userCoords={userCoords} />}
 
         {/* ── Alerts tab ── */}
         {activeTab === 'alerts' && <AlertsTab />}
@@ -536,6 +605,7 @@ export default function HomeScreen() {
         profile={profile}
         user={authUser}
       />
+      <LowRatingModal visible={lowRatingVisible} onClose={() => setLowRatingVisible(false)} />
 
       {/* Tab bar */}
       <SafeAreaView style={styles.tabBarSafe} edges={['bottom']}>
@@ -574,7 +644,7 @@ const styles = StyleSheet.create({
   scrollContent: { paddingHorizontal: 24 },
   greetingSection: { marginBottom: 20 },
   greetingSub: { fontFamily: 'Inter_400Regular', color: GRAY, fontSize: 15, marginBottom: 2 },
-  greetingNameRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  greetingNameRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   greetingName: { fontFamily: 'Inter_700Bold', color: '#FFFFFF', fontSize: 30 },
   statusCard: {
     backgroundColor: CARD_BG,
@@ -688,6 +758,8 @@ const styles = StyleSheet.create({
   tab: { flex: 1, alignItems: 'center', gap: 4 },
   tabLabel: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 11 },
   tabLabelActive: { fontFamily: 'Inter_600SemiBold', color: PURPLE },
+  starBadge: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  starValue: { fontFamily: 'Inter_700Bold', fontSize: 20 },
 });
 
 // Profile tab styles
@@ -817,6 +889,16 @@ const pf = StyleSheet.create({
   },
   editBtnText: { fontFamily: 'Inter_600SemiBold', color: PURPLE, fontSize: 15 },
 
+  statsRow: { flexDirection: 'row', gap: 10, marginBottom: 20 },
+  statCard: {
+    flex: 1, backgroundColor: CARD_BG, borderRadius: 14,
+    paddingVertical: 14, alignItems: 'center',
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.12)',
+  },
+  statRatingRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  statValue: { fontFamily: 'Inter_700Bold', color: '#C4B5FD', fontSize: 18, marginBottom: 2 },
+  statLabel: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 12 },
+
   logoutBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -926,4 +1008,41 @@ const bm = StyleSheet.create({
     paddingHorizontal: 16, paddingBottom: 14,
   },
   publicVisibleText: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 12 },
+});
+
+// Low rating modal styles
+const lm = StyleSheet.create({
+  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.55)' },
+  backdrop: { flex: 1 },
+  sheet: {
+    backgroundColor: CARD_BG,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.2)',
+    paddingHorizontal: 20,
+  },
+  handle: {
+    width: 36, height: 4, borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignSelf: 'center', marginTop: 10, marginBottom: 16,
+  },
+  header: {
+    flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  title: { fontFamily: 'Inter_700Bold', color: '#FFFFFF', fontSize: 17, marginBottom: 3 },
+  sub: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 13 },
+  closeBtn: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  tipRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingVertical: 14 },
+  tipIconWrap: {
+    width: 36, height: 36, borderRadius: 10,
+    backgroundColor: 'rgba(239,68,68,0.12)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  tipText: { fontFamily: 'Inter_400Regular', color: '#FFFFFF', fontSize: 14, flex: 1, lineHeight: 20 },
 });

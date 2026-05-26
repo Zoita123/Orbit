@@ -152,7 +152,7 @@ export default function Screen3() {
           <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={styles.backButton}>
             <Feather name="arrow-left" size={20} color={GRAY} />
           </TouchableOpacity>
-          <TouchableOpacity hitSlop={12}>
+          <TouchableOpacity hitSlop={12} onPress={() => router.replace('/login')}>
             <Text style={styles.skipText}>Saltar</Text>
           </TouchableOpacity>
         </View>

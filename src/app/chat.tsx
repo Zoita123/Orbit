@@ -1,4 +1,4 @@
-import { Feather } from '@expo/vector-icons';
+import { AntDesign, Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
@@ -6,6 +6,7 @@ import {
   ActivityIndicator,
   FlatList,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -15,7 +16,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { fetchConversation, fetchMessages, sendMessage, supabase } from '../lib/supabase';
+import { checkConflict, createNotification, createReservation, fetchConversation, fetchMessages, sendMessage, supabase } from '../lib/supabase';
 
 const BG = '#080A1A';
 const CARD_BG = '#13142A';
@@ -33,7 +34,14 @@ type QuickReply = { label: string; positive?: boolean };
 function getQuickReplies(text: string): QuickReply[] {
   const t = text.toLowerCase();
 
-  // Preguntas específicas primero (más contexto gana)
+  // Confirmar reserva (chequear ANTES que disponible)
+  if (t.includes('reservamos') || t.includes('reservar') || t.includes('confirmamos') || t.includes('lo cerramos')) {
+    return [
+      { label: '¡Sí, reservemos! ✓', positive: true },
+      { label: 'Perfecto, lo reservo ✓', positive: true },
+      { label: 'Dame un momento' },
+    ];
+  }
   if (t.includes('disponible') || t.includes('libre') || t.includes('tenés') || t.includes('tenes')) {
     return [
       { label: 'Sí, está disponible ✓', positive: true },
@@ -76,7 +84,6 @@ function getQuickReplies(text: string): QuickReply[] {
       { label: '¿Cuál necesitás?' },
     ];
   }
-  // Sentimiento positivo al final — solo si no hay pregunta específica
   if ((t.includes('gracias') || t.includes('genial') || t.includes('perfecto') || t.includes('buenísimo')) && !t.includes('?')) {
     return [
       { label: '¡De nada! 😊' },
@@ -92,11 +99,10 @@ const MOCK: Record<string, { name: string; initial: string; item: string; msgs: 
   '1': {
     name: 'María González', initial: 'M', item: 'Lavarropas',
     msgs: [
-      { id: '1', content: '¿Tenés disponible el lavarropas para el sábado?', mine: false, created_at: '10:02', type: 'text' },
-      { id: '2', content: 'Hola María! Sí, de 10 a 12 perfecto.', mine: true, created_at: '10:15', type: 'text' },
-      { id: '3', content: '¿Incluye detergente o traigo el mío?', mine: false, created_at: '10:17', type: 'text' },
-      { id: '4', content: 'Incluye detergente y suavizante 😊', mine: true, created_at: '10:20', type: 'text' },
-      { id: '5', content: 'Genial! ¿Cómo coordino la entrega?', mine: false, created_at: '10:21', type: 'text' },
+      { id: '1', content: 'Hola! Vi tu lavarropas en la app, me interesa alquilarlo 😊', mine: true, created_at: 'ayer 14:10', type: 'text' },
+      { id: '2', content: 'Hola! Con gusto. ¿Para cuándo lo necesitás?', mine: false, created_at: 'ayer 14:25', type: 'text' },
+      { id: '3', content: '¿Qué programas tiene disponibles?', mine: true, created_at: 'ayer 14:28', type: 'text' },
+      { id: '4', content: 'Diario, Color y Delicado. Incluye detergente y suavizante 🧴', mine: false, created_at: 'ayer 14:31', type: 'text' },
     ],
   },
   '2': {
@@ -110,13 +116,240 @@ const MOCK: Record<string, { name: string; initial: string; item: string; msgs: 
   },
 };
 
+// Auto-respuesta de María para el chat demo
+function getMockAutoResponse(text: string): string | null {
+  const t = text.toLowerCase();
+  const hasAvail = t.includes('disponible') || t.includes('libre');
+  const hasTime = t.includes('10') || t.includes('am') || t.includes('pm') || t.includes('hora') || t.includes('hoy') || t.includes('mañana');
+  if (hasAvail && hasTime) {
+    return 'Sí, disponible para las 10 am! ¿Lo reservamos? 🙌';
+  }
+  if (hasAvail) {
+    return 'Sí, está disponible esta semana 😊 ¿Qué día te viene bien?';
+  }
+  return null;
+}
+
 function formatTime(iso: string) {
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-// ─── Bubbles ──────────────────────────────────────────────────────────────────
+function nowHHMM() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+// ─── Reservation confirm modal ────────────────────────────────────────────────
+
+const PROGRAMS = ['Diario', 'Color', 'Delicado', 'Rápido'];
+const DELIVERY = [
+  { key: 'porteria',     label: 'Portería',      icon: 'inbox'   },
+  { key: 'espacio',      label: 'Espacio común', icon: 'home'    },
+  { key: 'rappi',        label: 'Rappi/Uber',    icon: 'package' },
+  { key: 'mano',         label: 'En mano',       icon: 'user'    },
+] as const;
+
+type ConfirmDetails = { program: string; delivery: string; date: string; timeFrom: string; timeTo: string };
+
+function ModalTime({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [hh, mm] = value.split(':');
+  return (
+    <View style={rm.timeBlock}>
+      <TextInput
+        style={rm.timeDigit}
+        value={hh}
+        onChangeText={(t) => {
+          const n = Math.min(23, parseInt(t.replace(/\D/g, '') || '0', 10));
+          onChange(`${String(n).padStart(2, '0')}:${mm}`);
+        }}
+        keyboardType="numeric" maxLength={2} selectTextOnFocus
+      />
+      <Text style={rm.timeColon}>:</Text>
+      <TextInput
+        style={rm.timeDigit}
+        value={mm}
+        onChangeText={(t) => {
+          const n = Math.min(59, parseInt(t.replace(/\D/g, '') || '0', 10));
+          onChange(`${hh}:${String(n).padStart(2, '0')}`);
+        }}
+        keyboardType="numeric" maxLength={2} selectTextOnFocus
+      />
+    </View>
+  );
+}
+
+function toDateStr(offset: number) {
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  return d.toISOString().split('T')[0];
+}
+
+function ReservationConfirmModal({
+  visible, onClose, onConfirmed, itemId,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  onConfirmed: (details: ConfirmDetails) => void;
+  itemId: string | null;
+}) {
+  const [dateOffset, setDateOffset] = useState(0); // 0=hoy, 1=mañana
+  const [timeFrom, setTimeFrom] = useState('10:00');
+  const [timeTo, setTimeTo]     = useState('12:00');
+  const [program, setProgram]   = useState('Diario');
+  const [delivery, setDelivery] = useState('porteria');
+  const [confirming, setConfirming] = useState(false);
+  const [conflictError, setConflictError] = useState('');
+
+  const handleConfirm = async () => {
+    setConflictError('');
+    setConfirming(true);
+
+    const dateStr = toDateStr(dateOffset);
+
+    if (itemId) {
+      const { conflict, slots } = await checkConflict(itemId, dateStr, timeFrom, timeTo);
+      if (conflict) {
+        const taken = slots[0];
+        setConflictError(`Ya hay una reserva de ${taken.time_from} a ${taken.time_to}. Elegí otro horario.`);
+        setConfirming(false);
+        return;
+      }
+    }
+
+    setConfirming(false);
+    onConfirmed({ program, delivery, date: dateStr, timeFrom, timeTo });
+  };
+
+  const DATE_OPTS = [
+    { label: 'Hoy',    offset: 0 },
+    { label: 'Mañana', offset: 1 },
+  ];
+
+  return (
+    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+      <View style={rm.overlay}>
+        <TouchableOpacity style={rm.backdrop} onPress={onClose} activeOpacity={1} />
+        <View style={rm.sheet}>
+          <View style={rm.handle} />
+
+          {/* Item header */}
+          <View style={rm.itemHeader}>
+            <View style={rm.itemIconWrap}>
+              <Feather name="refresh-cw" size={22} color="#C4B5FD" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={rm.itemName}>Lavarropas LG 7kg</Text>
+              <View style={rm.ownerRow}>
+                <Text style={rm.ownerName}>María González</Text>
+                <Text style={rm.ownerSep}> · </Text>
+                <AntDesign name="star" size={12} color="#F59E0B" />
+                <Text style={rm.ownerRating}> 4.8</Text>
+              </View>
+            </View>
+            <TouchableOpacity onPress={onClose} style={rm.closeBtn} activeOpacity={0.7}>
+              <Feather name="x" size={18} color={GRAY} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Date */}
+          <Text style={rm.sectionLabel}>FECHA</Text>
+          <View style={rm.dateRow}>
+            {DATE_OPTS.map((opt) => (
+              <TouchableOpacity
+                key={opt.offset}
+                style={[rm.dateChip, dateOffset === opt.offset && rm.dateChipActive]}
+                onPress={() => { setDateOffset(opt.offset); setConflictError(''); }}
+                activeOpacity={0.7}
+              >
+                <Feather name="calendar" size={13} color={dateOffset === opt.offset ? PURPLE : GRAY} />
+                <Text style={[rm.dateChipText, dateOffset === opt.offset && rm.dateChipTextActive]}>
+                  {opt.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Time */}
+          <Text style={rm.sectionLabel}>HORARIO</Text>
+          <View style={rm.timeRow}>
+            <View style={rm.timeSection}>
+              <Text style={rm.timeSectionLabel}>Desde</Text>
+              <ModalTime value={timeFrom} onChange={(v) => { setTimeFrom(v); setConflictError(''); }} />
+            </View>
+            <Feather name="arrow-right" size={14} color={BODY} style={{ marginTop: 20 }} />
+            <View style={rm.timeSection}>
+              <Text style={rm.timeSectionLabel}>Hasta</Text>
+              <ModalTime value={timeTo} onChange={(v) => { setTimeTo(v); setConflictError(''); }} />
+            </View>
+          </View>
+
+          {/* Program */}
+          <Text style={rm.sectionLabel}>PROGRAMA</Text>
+          <View style={rm.programRow}>
+            {PROGRAMS.map((p) => (
+              <TouchableOpacity
+                key={p}
+                style={[rm.programChip, program === p && rm.programChipActive]}
+                onPress={() => setProgram(p)}
+                activeOpacity={0.7}
+              >
+                <Text style={[rm.programChipText, program === p && rm.programChipTextActive]}>{p}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Delivery */}
+          <Text style={rm.sectionLabel}>MÉTODO DE ENTREGA</Text>
+          <View style={rm.deliveryGrid}>
+            {DELIVERY.map((d) => (
+              <TouchableOpacity
+                key={d.key}
+                style={[rm.deliveryItem, delivery === d.key && rm.deliveryItemActive]}
+                onPress={() => setDelivery(d.key)}
+                activeOpacity={0.7}
+              >
+                <Feather name={d.icon as any} size={18} color={delivery === d.key ? PURPLE : GRAY} />
+                <Text style={[rm.deliveryLabel, delivery === d.key && rm.deliveryLabelActive]}>{d.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Conflict error */}
+          {conflictError ? (
+            <View style={rm.conflictBanner}>
+              <Feather name="alert-circle" size={15} color="#F87171" style={{ marginTop: 1 }} />
+              <Text style={rm.conflictText}>{conflictError}</Text>
+            </View>
+          ) : null}
+
+          {/* Confirm */}
+          <TouchableOpacity onPress={handleConfirm} disabled={confirming} style={rm.confirmWrap} activeOpacity={0.85}>
+            <LinearGradient
+              colors={['#7C3AED', '#3B82F6']}
+              start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+              style={rm.confirmBtn}
+            >
+              {confirming
+                ? <ActivityIndicator color="#FFF" size="small" />
+                : <>
+                    <Feather name="check-circle" size={18} color="#FFF" />
+                    <Text style={rm.confirmText}>Confirmar reserva</Text>
+                  </>
+              }
+            </LinearGradient>
+          </TouchableOpacity>
+
+          <Text style={rm.hint}>Incluye detergente y suavizante 🧴</Text>
+          <View style={{ height: 28 }} />
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ─── Reservation prompt bubble ────────────────────────────────────────────────
 
 function ReservationPromptBubble({ onReserve }: { onReserve: () => void }) {
   return (
@@ -144,6 +377,35 @@ function ReservationPromptBubble({ onReserve }: { onReserve: () => void }) {
   );
 }
 
+// ─── Reservation confirmed bubble ─────────────────────────────────────────────
+
+function ReservationConfirmedBubble({ program, delivery, date, timeFrom, timeTo }: {
+  program: string; delivery: string; date?: string; timeFrom?: string; timeTo?: string;
+}) {
+  const deliveryLabel = DELIVERY.find((d) => d.key === delivery)?.label ?? delivery;
+  const todayStr = new Date().toISOString().split('T')[0];
+  const tomorrowStr = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+  const dateLabel = !date || date === todayStr ? 'Hoy'
+    : date === tomorrowStr ? 'Mañana'
+    : date;
+  const timeLabel = timeFrom && timeTo ? `${timeFrom} – ${timeTo}` : '10:00 – 12:00';
+  return (
+    <View style={styles.confirmedWrap}>
+      <View style={styles.confirmedCard}>
+        <View style={styles.confirmedIcon}>
+          <Feather name="check-circle" size={22} color={GREEN} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.confirmedTitle}>¡Reserva confirmada! ✅</Text>
+          <Text style={styles.confirmedDetail}>{dateLabel} · {timeLabel} · {program}</Text>
+          <Text style={styles.confirmedDetail}>{deliveryLabel} · Lavarropas LG 7kg</Text>
+        </View>
+      </View>
+      <Text style={styles.confirmedHint}>Podés verlo en tu calendario y notificaciones</Text>
+    </View>
+  );
+}
+
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function ChatScreen() {
@@ -159,6 +421,9 @@ export default function ChatScreen() {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [quickReplies, setQuickReplies] = useState<QuickReply[]>([]);
+  const [confirmModalVisible, setConfirmModalVisible] = useState(false);
+  const [convItemId, setConvItemId] = useState<string | null>(null);
+  const [convOwnerId, setConvOwnerId] = useState<string | null>(null);
 
   const listRef = useRef<FlatList>(null);
 
@@ -170,7 +435,6 @@ export default function ChatScreen() {
       setHeaderInitial(mock.initial);
       setHeaderItem(mock.item);
       setMessages(mock.msgs);
-      // Show quick replies for the last non-mine message
       const lastTheirs = [...mock.msgs].reverse().find((m) => !m.mine && m.type === 'text');
       if (lastTheirs) setQuickReplies(getQuickReplies(lastTheirs.content));
       setLoading(false);
@@ -188,10 +452,11 @@ export default function ChatScreen() {
         setHeaderName(name);
         setHeaderInitial(name[0]?.toUpperCase() ?? '?');
         setHeaderItem(conv.item?.name ?? '');
+        setConvItemId(conv.item_id ?? null);
+        setConvOwnerId(conv.owner_id ?? null);
       }
       const { data: msgs } = await fetchMessages(id);
       setMessages(msgs ?? []);
-      // Quick replies for last message from the other person
       const lastTheirs = [...(msgs ?? [])].reverse().find((m) => m.sender_id !== user?.id && m.type === 'text');
       if (lastTheirs) setQuickReplies(getQuickReplies(lastTheirs.content));
       setLoading(false);
@@ -210,7 +475,6 @@ export default function ChatScreen() {
           setMessages((prev) => {
             if (prev.some((m) => m.id === payload.new.id)) return prev;
             const updated = [...prev, payload.new];
-            // Update quick replies if new message is from other person
             if (payload.new.sender_id !== myId && payload.new.type === 'text') {
               setQuickReplies(getQuickReplies(payload.new.content));
             } else {
@@ -235,14 +499,14 @@ export default function ChatScreen() {
     const content = (text ?? input).trim();
     if (!content || sending) return;
     setInput('');
-    setQuickReplies([]);
 
     const isPositive = typeof text === 'string' &&
       quickReplies.find((q) => q.label === text)?.positive === true;
 
+    setQuickReplies([]);
+
     if (!isReal) {
-      const now = new Date();
-      const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const time = nowHHMM();
       const newMsg = { id: String(Date.now()), content, mine: true, created_at: time, type: 'text' };
       setMessages((prev) => {
         const updated = [...prev, newMsg];
@@ -252,6 +516,20 @@ export default function ChatScreen() {
         return updated;
       });
       setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
+
+      // Auto-respuesta de María (solo si no es un chip positivo que ya disparó la reserva)
+      if (!isPositive) {
+        const autoReply = getMockAutoResponse(content);
+        if (autoReply) {
+          setTimeout(() => {
+            const replyTime = nowHHMM();
+            const replyMsg = { id: String(Date.now() + 2), content: autoReply, mine: false, created_at: replyTime, type: 'text' };
+            setMessages((prev) => [...prev, replyMsg]);
+            setQuickReplies(getQuickReplies(autoReply));
+            setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
+          }, 1500);
+        }
+      }
       return;
     }
 
@@ -264,7 +542,6 @@ export default function ChatScreen() {
     if (data) {
       setMessages((prev) => prev.map((m) => m.id === optimistic.id ? data : m));
       if (isPositive) {
-        // Insert reservation_prompt for the other user
         await supabase.from('messages').insert({
           conversation_id: id,
           sender_id: myId,
@@ -280,6 +557,64 @@ export default function ChatScreen() {
   };
 
   const isMine = (msg: any) => isReal ? msg.sender_id === myId : msg.mine;
+
+  const handleReservationConfirmed = async (details: ConfirmDetails) => {
+    setConfirmModalVisible(false);
+
+    if (isReal && convItemId && convOwnerId) {
+      const { data: reservation } = await createReservation({
+        conversationId: id,
+        itemId: convItemId,
+        ownerId: convOwnerId,
+        date: details.date,
+        timeFrom: details.timeFrom,
+        timeTo: details.timeTo,
+        deliveryMethod: details.delivery,
+        program: details.program,
+      });
+      if (reservation) {
+        await createNotification({
+          userId: convOwnerId,
+          type: 'reservation_created',
+          reservationId: reservation.id,
+          title: `Nueva reserva para ${headerItem || 'tu ítem'}`,
+          body: `Reserva para el ${details.date} de ${details.timeFrom} a ${details.timeTo}`,
+        });
+      }
+      await supabase.from('messages').insert({
+        conversation_id: id,
+        sender_id: myId,
+        content: JSON.stringify({
+          program: details.program,
+          delivery: details.delivery,
+          date: details.date,
+          timeFrom: details.timeFrom,
+          timeTo: details.timeTo,
+        }),
+        type: 'reservation_confirmed',
+      });
+      return;
+    }
+
+    // Mock flow
+    const time = nowHHMM();
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: String(Date.now()),
+        content: '',
+        mine: false,
+        created_at: time,
+        type: 'reservation_confirmed',
+        program: details.program,
+        delivery: details.delivery,
+        date: details.date,
+        timeFrom: details.timeFrom,
+        timeTo: details.timeTo,
+      },
+    ]);
+    setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
+  };
 
   return (
     <View style={styles.container}>
@@ -316,11 +651,23 @@ export default function ChatScreen() {
             style={{ flex: 1 }}
             renderItem={({ item: msg, index }) => {
               if (msg.type === 'reservation_prompt') {
-                return (
-                  <ReservationPromptBubble
-                    onReserve={() => router.push({ pathname: '/reserve', params: { id: itemId ?? '' } })}
-                  />
-                );
+                return <ReservationPromptBubble onReserve={() => setConfirmModalVisible(true)} />;
+              }
+              if (msg.type === 'reservation_confirmed') {
+                let program = msg.program ?? 'Diario';
+                let delivery = msg.delivery ?? 'porteria';
+                let date = msg.date;
+                let timeFrom = msg.timeFrom;
+                let timeTo = msg.timeTo;
+                try {
+                  const parsed = JSON.parse(msg.content ?? '{}');
+                  if (parsed.program)   program  = parsed.program;
+                  if (parsed.delivery)  delivery = parsed.delivery;
+                  if (parsed.date)      date     = parsed.date;
+                  if (parsed.timeFrom)  timeFrom = parsed.timeFrom;
+                  if (parsed.timeTo)    timeTo   = parsed.timeTo;
+                } catch {}
+                return <ReservationConfirmedBubble program={program} delivery={delivery} date={date} timeFrom={timeFrom} timeTo={timeTo} />;
               }
               const mine = isMine(msg);
               const prevMine = index > 0 ? isMine(messages[index - 1]) : null;
@@ -345,7 +692,6 @@ export default function ChatScreen() {
             }}
           />
 
-          {/* Input bar + quick replies anclados abajo */}
           <SafeAreaView edges={['bottom']} style={styles.inputSafe}>
             {quickReplies.length > 0 && (
               <ScrollView
@@ -393,6 +739,13 @@ export default function ChatScreen() {
           </SafeAreaView>
         </KeyboardAvoidingView>
       )}
+
+      <ReservationConfirmModal
+        visible={confirmModalVisible}
+        onClose={() => setConfirmModalVisible(false)}
+        onConfirmed={handleReservationConfirmed}
+        itemId={convItemId}
+      />
     </View>
   );
 }
@@ -449,9 +802,125 @@ const styles = StyleSheet.create({
   reserveNowBtn: { height: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   reserveNowText: { fontFamily: 'Inter_700Bold', color: '#FFF', fontSize: 15 },
 
+  confirmedWrap: { marginHorizontal: 16, marginVertical: 10 },
+  confirmedCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: 'rgba(16,185,129,0.06)',
+    borderRadius: 14, borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.3)',
+    padding: 14, marginBottom: 6,
+  },
+  confirmedIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: 'rgba(16,185,129,0.15)', alignItems: 'center', justifyContent: 'center' },
+  confirmedTitle: { fontFamily: 'Inter_700Bold', color: '#FFFFFF', fontSize: 15, marginBottom: 3 },
+  confirmedDetail: { fontFamily: 'Inter_400Regular', color: GRAY, fontSize: 12, lineHeight: 18 },
+  confirmedHint: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 11, textAlign: 'center' },
+
   inputSafe: { backgroundColor: CARD_BG, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)' },
   inputBar: { flexDirection: 'row', alignItems: 'flex-end', gap: 10, paddingHorizontal: 16, paddingVertical: 10 },
   input: { flex: 1, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', paddingHorizontal: 16, paddingVertical: 10, color: '#FFFFFF', fontFamily: 'Inter_400Regular', fontSize: 15, maxHeight: 100 },
   sendBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: PURPLE, alignItems: 'center', justifyContent: 'center' },
   sendBtnDisabled: { backgroundColor: 'rgba(139,92,246,0.25)' },
+});
+
+// ─── Reservation confirm modal styles ─────────────────────────────────────────
+
+const rm = StyleSheet.create({
+  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.65)' },
+  backdrop: { flex: 1 },
+  sheet: {
+    backgroundColor: CARD_BG,
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
+    paddingHorizontal: 20,
+  },
+  handle: {
+    width: 36, height: 4, borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignSelf: 'center', marginTop: 10, marginBottom: 18,
+  },
+  itemHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  itemIconWrap: {
+    width: 48, height: 48, borderRadius: 14,
+    backgroundColor: 'rgba(139,92,246,0.15)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  itemName: { fontFamily: 'Inter_700Bold', color: '#FFF', fontSize: 16, marginBottom: 4 },
+  ownerRow: { flexDirection: 'row', alignItems: 'center' },
+  ownerName: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 13 },
+  ownerSep: { color: BODY, fontSize: 13 },
+  ownerRating: { fontFamily: 'Inter_600SemiBold', color: '#F59E0B', fontSize: 13, marginLeft: 3 },
+  closeBtn: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  detailsRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 12, marginBottom: 18,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 12, paddingVertical: 12,
+  },
+  detailItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  detailText: { fontFamily: 'Inter_500Medium', color: '#FFF', fontSize: 13 },
+  detailDot: { width: 3, height: 3, borderRadius: 1.5, backgroundColor: BODY },
+  sectionLabel: {
+    fontFamily: 'Inter_700Bold', color: GRAY, fontSize: 10, letterSpacing: 1.2, marginBottom: 10,
+  },
+  programRow: { flexDirection: 'row', gap: 7, marginBottom: 20 },
+  programChip: {
+    flex: 1, paddingVertical: 9, borderRadius: 10, borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)', backgroundColor: 'rgba(255,255,255,0.04)',
+    alignItems: 'center',
+  },
+  programChipActive: { borderColor: PURPLE, backgroundColor: 'rgba(139,92,246,0.15)' },
+  programChipText: { fontFamily: 'Inter_500Medium', color: GRAY, fontSize: 12 },
+  programChipTextActive: { color: PURPLE, fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  deliveryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 },
+  deliveryItem: {
+    width: '48%', flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 12, paddingVertical: 12,
+    borderRadius: 12, borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  deliveryItemActive: { borderColor: PURPLE, backgroundColor: 'rgba(139,92,246,0.12)' },
+  deliveryLabel: { fontFamily: 'Inter_400Regular', color: GRAY, fontSize: 13 },
+  deliveryLabelActive: { color: PURPLE, fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  // Date selector
+  dateRow: { flexDirection: 'row', gap: 8, marginBottom: 18 },
+  dateChip: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingVertical: 10, borderRadius: 10, borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)', backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  dateChipActive: { borderColor: PURPLE, backgroundColor: 'rgba(139,92,246,0.12)' },
+  dateChipText: { fontFamily: 'Inter_500Medium', color: GRAY, fontSize: 13 },
+  dateChipTextActive: { color: PURPLE, fontFamily: 'Inter_600SemiBold' },
+
+  // Time inputs
+  timeRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', gap: 20, marginBottom: 18 },
+  timeSection: { alignItems: 'center', gap: 6 },
+  timeSectionLabel: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 11 },
+  timeBlock: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  timeDigit: {
+    width: 40, height: 40, borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderWidth: 1, borderColor: 'rgba(139,92,246,0.3)',
+    color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 16, textAlign: 'center',
+  },
+  timeColon: { fontFamily: 'Inter_700Bold', color: GRAY, fontSize: 18 },
+
+  // Conflict error
+  conflictBanner: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 8,
+    backgroundColor: 'rgba(248,113,113,0.08)',
+    borderRadius: 10, borderWidth: 1, borderColor: 'rgba(248,113,113,0.25)',
+    padding: 12, marginBottom: 12,
+  },
+  conflictText: { fontFamily: 'Inter_400Regular', color: '#F87171', fontSize: 13, flex: 1, lineHeight: 18 },
+
+  confirmWrap: { borderRadius: 14, overflow: 'hidden', marginBottom: 10 },
+  confirmBtn: { height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  confirmText: { fontFamily: 'Inter_700Bold', color: '#FFF', fontSize: 16 },
+  hint: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 12, textAlign: 'center', marginBottom: 4 },
 });

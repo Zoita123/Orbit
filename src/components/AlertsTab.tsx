@@ -1,8 +1,19 @@
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import { useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  acceptReservation,
+  createNotification,
+  fetchConversations,
+  fetchNotifications,
+  fetchReservations,
+  markNotificationRead,
+  rejectReservation,
+  sendMessage,
+  supabase,
+} from '../lib/supabase';
 
 const BG = '#080A1A';
 const CARD_BG = '#13142A';
@@ -16,62 +27,42 @@ const GREEN = '#10B981';
 const NOTIFS = [
   {
     id: '1',
-    icon: 'package' as const,
-    title: 'Nueva solicitud de alquiler',
-    body: 'María González quiere alquilar tu lavarropas',
+    icon: 'check-circle' as const,
+    title: 'Reserva confirmada',
+    body: 'Tu reserva del lavarropas con María González está confirmada para hoy a las 10:00',
     time: 'hace 5 min',
+    unread: true,
+    color: GREEN,
+  },
+  {
+    id: '2',
+    icon: 'calendar' as const,
+    title: 'Recordatorio de hoy',
+    body: 'A las 10:00 retirás el lavarropas de María González en portería',
+    time: 'hace 20 min',
     unread: true,
     color: PURPLE,
   },
   {
-    id: '2',
-    icon: 'check-circle' as const,
-    title: 'Reserva confirmada',
-    body: 'Confirmaste el lavarropas para María González el sábado',
-    time: 'hace 20 min',
-    unread: false,
-    color: GREEN,
-  },
-  {
     id: '3',
-    icon: 'tool' as const,
-    title: 'Tu reserva fue aceptada',
-    body: 'Carlos Rodríguez aceptó prestarte la escalera',
+    icon: 'check-circle' as const,
+    title: 'Reserva aceptada',
+    body: 'Carlos Rodríguez aceptó prestarte la escalera el martes de 15:00 a 17:00',
     time: 'hace 2h',
     unread: false,
-    color: '#F59E0B',
+    color: GREEN,
   },
   {
     id: '4',
     icon: 'star' as const,
     title: 'Nueva reseña',
-    body: 'Recibiste 5 estrellas de tu última entrega',
+    body: 'Recibiste 5 estrellas de tu última reserva',
     time: 'ayer',
     unread: false,
     color: '#FBBF24',
   },
 ];
 
-const CHATS = [
-  {
-    id: '1',
-    name: 'María González',
-    initial: 'M',
-    item: 'Lavarropas',
-    lastMessage: 'Hola! ¿Está disponible para el sábado?',
-    time: 'hace 5 min',
-    unread: 1,
-  },
-  {
-    id: '2',
-    name: 'Carlos Rodríguez',
-    initial: 'C',
-    item: 'Escalera',
-    lastMessage: 'Perfecto, nos vemos a las 10 entonces 👍',
-    time: 'hace 3h',
-    unread: 0,
-  },
-];
 
 // ─── Calendar helpers ─────────────────────────────────────────────────────────
 
@@ -127,11 +118,11 @@ type CalEvent = {
 const EVENTS: CalEvent[] = [
   {
     date: today, name: 'María González', initial: 'M', chatId: '1',
-    item: 'Lavarropas', from: '10:00', to: '12:00', type: 'lending',
+    item: 'Lavarropas', from: '10:00', to: '12:00', type: 'borrowing',
     delivery: 'porteria',
     includes: ['Detergente incluido', 'Suavizante incluido'],
-    programs: ['Diario', 'Color'],
-    note: 'Prefiero que lo retiren antes de las 10. Dejar en portería a nombre de González.',
+    programs: ['Diario'],
+    note: 'Retirar en portería a nombre de González. Cualquier duda escribime por el chat.',
   },
   {
     date: today, name: 'Carlos Rodríguez', initial: 'C', chatId: '2',
@@ -145,7 +136,7 @@ const EVENTS: CalEvent[] = [
     delivery: 'envio',
     includes: ['Sin detergente — traer el propio'],
     programs: ['Delicado', 'Lana'],
-    note: 'Coordinar con Rappi o Uber envíos. El equipo está embalado y listo.',
+    note: 'Laura va a coordinar el envío por Rappi. El equipo ya está listo para entregar.',
   },
   {
     date: dayAfter, name: 'Juan Torres', initial: 'J', chatId: '2',
@@ -163,72 +154,313 @@ function eventColor(type: EventType) {
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
 function NotifsSection() {
-  const [read, setRead] = useState<Set<string>>(new Set());
+  const [notifs, setNotifs] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [actioningId, setActioningId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    const { data } = await fetchNotifications();
+    setNotifs(data ?? []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleAccept = async (notif: any) => {
+    const res = notif.reservation;
+    if (!res) return;
+    setActioningId(notif.id);
+    const { data: updated, error } = await acceptReservation(res.id);
+    if (error) {
+      Alert.alert('Error', 'No se pudo confirmar la reserva.');
+      setActioningId(null);
+      return;
+    }
+    if (updated?.conversation_id) {
+      const itemName = res.item?.name ?? 'el ítem';
+      const msg = `✅ Reserva confirmada\n${itemName} · ${res.date} · ${res.time_from} – ${res.time_to}${res.program ? `\nPrograma: ${res.program}` : ''}\n\nCoordiná la entrega por este chat.`;
+      await sendMessage(updated.conversation_id, msg, 'text');
+      if (res.borrower_id) {
+        await createNotification({
+          userId: res.borrower_id,
+          type: 'reservation',
+          reservationId: res.id,
+          title: 'Reserva confirmada ✅',
+          body: `${itemName} · ${res.date} · ${res.time_from}`,
+        });
+      }
+    }
+    await markNotificationRead(notif.id);
+    setActioningId(null);
+    await load();
+    if (updated?.conversation_id) {
+      router.push({ pathname: '/chat', params: { id: updated.conversation_id } });
+    }
+  };
+
+  const handleReject = async (notif: any) => {
+    const res = notif.reservation;
+    if (!res) return;
+    setActioningId(notif.id);
+    const { data: updated } = await rejectReservation(res.id);
+    if (res.borrower_id) {
+      await createNotification({
+        userId: res.borrower_id,
+        type: 'reservation',
+        reservationId: res.id,
+        title: 'Solicitud rechazada',
+        body: `${res.item?.name ?? 'Ítem'} · ${res.date} · ${res.time_from}`,
+      });
+    }
+    await markNotificationRead(notif.id);
+    setActioningId(null);
+    load();
+  };
+
+  const notifMeta = (n: any): { icon: any; color: string } => {
+    const isPending = n.reservation?.status === 'pending';
+    if (isPending) return { icon: 'clock', color: '#F59E0B' };
+    if (n.title?.includes('confirmada') || n.title?.includes('confirmado')) return { icon: 'check-circle', color: GREEN };
+    if (n.title?.includes('rechazada') || n.title?.includes('rechazado')) return { icon: 'x-circle', color: '#F87171' };
+    return { icon: 'bell', color: PURPLE };
+  };
+
+  const useFallback = !loading && notifs.length === 0;
 
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.list}>
-      {NOTIFS.map((n) => {
-        const isUnread = n.unread && !read.has(n.id);
-        return (
-          <TouchableOpacity
-            key={n.id}
-            style={[s.notifCard, isUnread && s.notifCardUnread]}
-            activeOpacity={0.75}
-            onPress={() => setRead((prev) => new Set([...prev, n.id]))}
-          >
-            <View style={[s.notifIconWrap, { backgroundColor: `${n.color}20` }]}>
-              <Feather name={n.icon} size={18} color={n.color} />
+      {loading && <ActivityIndicator color={PURPLE} style={{ marginTop: 32 }} />}
+
+      {/* Static demo cards when no real notifications yet */}
+      {useFallback && NOTIFS.map((n) => (
+        <View key={n.id} style={[s.notifCard, n.unread && s.notifCardUnread]}>
+          <View style={[s.notifIconWrap, { backgroundColor: `${n.color}20` }]}>
+            <Feather name={n.icon} size={18} color={n.color} />
+          </View>
+          <View style={{ flex: 1, gap: 3 }}>
+            <View style={s.notifTopRow}>
+              <Text style={s.notifTitle}>{n.title}</Text>
+              {n.unread && <View style={s.unreadDot} />}
             </View>
-            <View style={{ flex: 1, gap: 3 }}>
+            <Text style={s.notifBody}>{n.body}</Text>
+            <Text style={s.notifTime}>{n.time}</Text>
+          </View>
+        </View>
+      ))}
+
+      {/* Real notifications */}
+      {notifs.map((n) => {
+        const res = n.reservation;
+        const isPending = res?.status === 'pending';
+        const isActioning = actioningId === n.id;
+        const { icon, color } = notifMeta(n);
+        const borrowerName = res?.borrower
+          ? `${res.borrower.nombre ?? ''} ${res.borrower.apellido ?? ''}`.trim()
+          : null;
+        return (
+          <View
+            key={n.id}
+            style={[s.notifCard, !n.read && s.notifCardUnread, isPending && s.notifCardPending]}
+          >
+            <View style={[s.notifIconWrap, { backgroundColor: `${color}20` }]}>
+              <Feather name={icon} size={18} color={color} />
+            </View>
+            <View style={{ flex: 1, gap: 4 }}>
               <View style={s.notifTopRow}>
                 <Text style={s.notifTitle}>{n.title}</Text>
-                {isUnread && <View style={s.unreadDot} />}
+                {!n.read && (
+                  <View style={[s.unreadDot, isPending && { backgroundColor: '#F59E0B' }]} />
+                )}
               </View>
+              {borrowerName && isPending && (
+                <Text style={s.notifBorrower}>{borrowerName} quiere reservar</Text>
+              )}
               <Text style={s.notifBody}>{n.body}</Text>
-              <Text style={s.notifTime}>{n.time}</Text>
+              {res && (
+                <View style={s.notifResRow}>
+                  <Feather name="calendar" size={11} color={BODY} />
+                  <Text style={s.notifResText}>{res.date} · {res.time_from} – {res.time_to}</Text>
+                  {res.program ? (
+                    <View style={s.notifResPill}>
+                      <Text style={s.notifResProg}>{res.program}</Text>
+                    </View>
+                  ) : null}
+                </View>
+              )}
+              <Text style={s.notifTime}>{relativeTime(n.created_at)}</Text>
+
+              {isPending && (
+                <View style={s.notifActions}>
+                  <TouchableOpacity
+                    style={s.notifBtnReject}
+                    onPress={() => handleReject(n)}
+                    disabled={isActioning}
+                    activeOpacity={0.75}
+                  >
+                    <Feather name="x" size={14} color="#F87171" />
+                    <Text style={s.notifBtnRejectText}>Rechazar</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={s.notifBtnAcceptWrap}
+                    onPress={() => handleAccept(n)}
+                    disabled={isActioning}
+                    activeOpacity={0.85}
+                  >
+                    {isActioning ? (
+                      <View style={s.notifBtnAcceptLoading}>
+                        <ActivityIndicator color="#FFF" size="small" />
+                      </View>
+                    ) : (
+                      <LinearGradient
+                        colors={['#059669', '#10B981']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={s.notifBtnAccept}
+                      >
+                        <Feather name="check" size={14} color="#FFF" />
+                        <Text style={s.notifBtnAcceptText}>Aceptar</Text>
+                      </LinearGradient>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
-          </TouchableOpacity>
+          </View>
         );
       })}
+
       <View style={{ height: 24 }} />
     </ScrollView>
   );
 }
 
+function relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'ahora';
+  if (mins < 60) return `hace ${mins} min`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `hace ${hrs}h`;
+  return `hace ${Math.floor(hrs / 24)}d`;
+}
+
 function ChatsSection() {
+  const [conversations, setConversations] = useState<any[]>([]);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setUserId(data.user?.id ?? null));
+    fetchConversations().then(({ data }) => {
+      setConversations(data ?? []);
+      setLoading(false);
+    });
+  }, []);
+
+  const getOther = (conv: any) => {
+    if (!userId) return { name: '…', initial: '?' };
+    if (conv.owner_id === userId) {
+      const b = conv.borrower;
+      return { name: `${b?.nombre ?? ''} ${b?.apellido ?? ''}`.trim() || 'Vecino', initial: b?.nombre?.[0]?.toUpperCase() ?? 'V' };
+    }
+    const o = conv.owner;
+    return { name: `${o?.nombre ?? ''} ${o?.apellido ?? ''}`.trim() || 'Vecino', initial: o?.nombre?.[0]?.toUpperCase() ?? 'V' };
+  };
+
+  const getUnread = (conv: any) =>
+    (conv.messages ?? []).filter((m: any) => !m.read && m.sender_id !== userId).length;
+
+  const getLastMsg = (conv: any) => {
+    const msgs = conv.messages ?? [];
+    const last = msgs[msgs.length - 1];
+    return last ?? null;
+  };
+
+  const mockConv = {
+    id: '1',
+    item: { name: 'Lavarropas' },
+    otherName: 'María González',
+    otherInitial: 'M',
+    lastText: 'Sí, disponible para las 10 am! ¿Lo reservamos? 🙌',
+    time: 'hace 5 min',
+    unread: 1,
+  };
+
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.list}>
       <Text style={s.sectionLabel}>CONVERSACIONES</Text>
-      {CHATS.map((c) => (
-        <TouchableOpacity
-          key={c.id}
-          style={s.chatCard}
-          activeOpacity={0.75}
-          onPress={() => router.push({ pathname: '/chat', params: { id: c.id } })}
-        >
-          <View style={s.chatAvatar}>
-            <Text style={s.chatAvatarText}>{c.initial}</Text>
-          </View>
-          <View style={{ flex: 1 }}>
-            <View style={s.chatTopRow}>
-              <Text style={s.chatName}>{c.name}</Text>
-              <Text style={s.chatTime}>{c.time}</Text>
-            </View>
-            <Text style={s.chatItem}>{c.item}</Text>
-            <Text style={s.chatLast} numberOfLines={1}>{c.lastMessage}</Text>
-          </View>
-          {c.unread > 0 && (
-            <View style={s.unreadBadge}>
-              <Text style={s.unreadBadgeText}>{c.unread}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      ))}
 
-      <View style={s.emptyChats}>
-        <Feather name="message-circle" size={28} color={BODY} />
-        <Text style={s.emptyText}>Las nuevas conversaciones{'\n'}aparecerán aquí</Text>
-      </View>
+      {/* Mock demo conversation always pinned at top */}
+      <TouchableOpacity
+        style={s.chatCard}
+        activeOpacity={0.75}
+        onPress={() => router.push({ pathname: '/chat', params: { id: mockConv.id } })}
+      >
+        <View style={s.chatAvatar}>
+          <Text style={s.chatAvatarText}>{mockConv.otherInitial}</Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <View style={s.chatTopRow}>
+            <Text style={s.chatName}>{mockConv.otherName}</Text>
+            <Text style={s.chatTime}>{mockConv.time}</Text>
+          </View>
+          <Text style={s.chatItem}>{mockConv.item.name}</Text>
+          <Text style={s.chatLast} numberOfLines={1}>{mockConv.lastText}</Text>
+        </View>
+        <View style={s.unreadBadge}>
+          <Text style={s.unreadBadgeText}>{mockConv.unread}</Text>
+        </View>
+      </TouchableOpacity>
+
+      {/* Real conversations */}
+      {loading ? (
+        <ActivityIndicator color={PURPLE} style={{ marginTop: 16 }} />
+      ) : (
+        conversations.map((conv) => {
+          const other = getOther(conv);
+          const unread = getUnread(conv);
+          const lastMsg = getLastMsg(conv);
+          const lastText = lastMsg?.content ?? '';
+          const timeStr = lastMsg?.created_at ? relativeTime(lastMsg.created_at) : '';
+
+          return (
+            <TouchableOpacity
+              key={conv.id}
+              style={s.chatCard}
+              activeOpacity={0.75}
+              onPress={() => router.push({ pathname: '/chat', params: { id: conv.id } })}
+            >
+              <View style={s.chatAvatar}>
+                <Text style={s.chatAvatarText}>{other.initial}</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <View style={s.chatTopRow}>
+                  <Text style={s.chatName}>{other.name}</Text>
+                  {timeStr ? <Text style={s.chatTime}>{timeStr}</Text> : null}
+                </View>
+                <Text style={s.chatItem}>{conv.item?.name ?? 'Ítem'}</Text>
+                {lastText ? (
+                  <Text style={s.chatLast} numberOfLines={1}>{lastText}</Text>
+                ) : (
+                  <Text style={[s.chatLast, { color: BODY, fontStyle: 'italic' }]}>Nueva conversación</Text>
+                )}
+              </View>
+              {unread > 0 && (
+                <View style={s.unreadBadge}>
+                  <Text style={s.unreadBadgeText}>{unread}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          );
+        })
+      )}
+
+      {!loading && conversations.length === 0 && (
+        <View style={s.emptyChats}>
+          <Feather name="message-circle" size={28} color={BODY} />
+          <Text style={s.emptyText}>Las nuevas conversaciones{'\n'}aparecerán aquí</Text>
+        </View>
+      )}
 
       <View style={{ height: 24 }} />
     </ScrollView>
@@ -396,15 +628,50 @@ function EventDetailModal({ event, onClose }: { event: CalEvent; onClose: () => 
   );
 }
 
+function mapReservationToEvent(res: any, userId: string): CalEvent {
+  const isOwner = res.owner_id === userId;
+  const other = isOwner ? res.borrower : res.owner;
+  const name = `${other?.nombre ?? ''} ${other?.apellido ?? ''}`.trim() || 'Vecino';
+  const [year, month, day] = (res.date as string).split('-').map(Number);
+  return {
+    date: new Date(year, month - 1, day),
+    name,
+    initial: other?.nombre?.[0]?.toUpperCase() ?? 'V',
+    item: res.item?.name ?? 'Ítem',
+    from: res.time_from,
+    to: res.time_to,
+    type: isOwner ? 'lending' : 'borrowing',
+    delivery: res.delivery_method as DeliveryMethod,
+    chatId: res.conversation_id,
+    programs: res.program ? [res.program] : [],
+  };
+}
+
 function CalendarSection() {
   const [selectedDate, setSelectedDate] = useState(today);
   const [activeEvent, setActiveEvent] = useState<CalEvent | null>(null);
   const [weekBase, setWeekBase] = useState(today);
+  const [events, setEvents] = useState<CalEvent[]>(EVENTS); // start with demo data
+  const [userId, setUserId] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function load() {
+      const { data: { user } } = await supabase.auth.getUser();
+      const uid = user?.id ?? null;
+      setUserId(uid);
+      const { data } = await fetchReservations();
+      if (data && data.length > 0 && uid) {
+        setEvents(data.map((r: any) => mapReservationToEvent(r, uid)));
+      }
+      // if no real reservations, keep the demo EVENTS
+    }
+    load();
+  }, []);
 
   const week = getWeekDays(weekBase);
   const monthLabel = `${MONTH_ES[week[0].getMonth()]} ${week[0].getFullYear()}`;
 
-  const dayEvents = EVENTS.filter((e) => sameDay(e.date, selectedDate));
+  const dayEvents = events.filter((e) => sameDay(e.date, selectedDate));
 
   const prevWeek = () => {
     const d = new Date(weekBase);
@@ -437,7 +704,7 @@ function CalendarSection() {
           const isSelected = sameDay(d, selectedDate);
           const isToday = sameDay(d, today);
           const isPast = !isToday && d < today;
-          const hasEvent = EVENTS.some((e) => sameDay(e.date, d));
+          const hasEvent = events.some((e) => sameDay(e.date, d));
           return (
             <TouchableOpacity
               key={i}
@@ -537,7 +804,7 @@ export default function AlertsTab() {
       <View style={s.subBar}>
         {([
           { key: 'notifs', label: 'Notificaciones', badge: unreadCount },
-          { key: 'chats',  label: 'Chats',          badge: CHATS.filter(c => c.unread > 0).length },
+          { key: 'chats',  label: 'Chats',          badge: 1 }, // mock María unread
           { key: 'cal',    label: 'Calendario',     badge: 0 },
         ] as { key: SubTab; label: string; badge: number }[]).map((t) => (
           <TouchableOpacity
@@ -618,6 +885,83 @@ const s = StyleSheet.create({
   notifCardUnread: {
     borderColor: 'rgba(139,92,246,0.3)',
     backgroundColor: 'rgba(139,92,246,0.07)',
+  },
+  notifCardPending: {
+    borderColor: 'rgba(245,158,11,0.4)',
+    backgroundColor: 'rgba(245,158,11,0.06)',
+  },
+  notifBorrower: {
+    fontFamily: 'Inter_600SemiBold',
+    color: '#F59E0B',
+    fontSize: 13,
+  },
+  notifResRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    flexWrap: 'wrap',
+  },
+  notifResText: {
+    fontFamily: 'Inter_500Medium',
+    color: GRAY,
+    fontSize: 12,
+  },
+  notifResPill: {
+    backgroundColor: 'rgba(139,92,246,0.15)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  notifResProg: {
+    fontFamily: 'Inter_500Medium',
+    color: '#C4B5FD',
+    fontSize: 11,
+  },
+  notifActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 6,
+  },
+  notifBtnReject: {
+    flex: 1,
+    height: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(248,113,113,0.35)',
+    backgroundColor: 'rgba(248,113,113,0.08)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  notifBtnRejectText: {
+    fontFamily: 'Inter_600SemiBold',
+    color: '#F87171',
+    fontSize: 13,
+  },
+  notifBtnAcceptWrap: {
+    flex: 1,
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  notifBtnAccept: {
+    height: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  notifBtnAcceptText: {
+    fontFamily: 'Inter_700Bold',
+    color: '#FFF',
+    fontSize: 13,
+  },
+  notifBtnAcceptLoading: {
+    height: 38,
+    backgroundColor: '#059669',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 10,
   },
   notifIconWrap: {
     width: 40,

@@ -3,7 +3,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { signInWithGoogle } from '../lib/supabase';
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -14,6 +13,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
+import { signInWithGoogle } from '../lib/supabase';
 
 const BG = '#080A1A';
 const PURPLE = '#8B5CF6';
@@ -70,26 +70,18 @@ function AnimatedOrbitLogo() {
 
   return (
     <View style={{ width: CONTAINER, height: CONTAINER }}>
-      {/* Outer orbit path ring */}
       <View style={styles.orbitPath} />
-
-      {/* Inner glowing ring with orbit title */}
       <Animated.View style={[styles.logoRing, ringStyle]}>
         <Text style={styles.logoText}>orbit</Text>
       </Animated.View>
-
-      {/* Orbiting dot */}
-      <Animated.View
-        pointerEvents="none"
-        style={[styles.dotArm, armStyle]}
-      >
+      <Animated.View pointerEvents="none" style={[styles.dotArm, armStyle]}>
         <View style={[styles.dot, { marginTop: DOT_OFFSET }]} />
       </Animated.View>
     </View>
   );
 }
 
-export default function SignupScreen() {
+export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
 
   const handleGoogleSignIn = async () => {
@@ -108,12 +100,22 @@ export default function SignupScreen() {
   return (
     <View style={styles.container}>
       <SafeAreaView style={styles.safe}>
+        {/* Back button */}
+        <TouchableOpacity
+          style={styles.backBtn}
+          onPress={() => router.back()}
+          hitSlop={12}
+          activeOpacity={0.7}
+        >
+          <Feather name="arrow-left" size={20} color={GRAY} />
+        </TouchableOpacity>
+
         <View style={styles.content}>
           <View style={styles.heroSection}>
             <AnimatedOrbitLogo />
-            <Text style={styles.headline}>Creá tu cuenta</Text>
+            <Text style={styles.headline}>Bienvenido de vuelta</Text>
             <Text style={styles.subtext}>
-              Unite a tu comunidad y empezá a{'\n'}compartir con tus vecinos
+              Tu comunidad te espera.{'\n'}Ingresá para continuar.
             </Text>
           </View>
 
@@ -152,8 +154,8 @@ export default function SignupScreen() {
               <View style={styles.dividerLine} />
             </View>
 
-            <TouchableOpacity hitSlop={12} onPress={() => router.replace('/login')}>
-              <Text style={styles.loginText}>Ya tengo una cuenta</Text>
+            <TouchableOpacity hitSlop={12} onPress={() => router.push('/onboarding')}>
+              <Text style={styles.signupText}>¿No tenés cuenta? <Text style={styles.signupLink}>Unite</Text></Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -165,12 +167,16 @@ export default function SignupScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
   safe: { flex: 1 },
-  header: {
-    paddingHorizontal: 24,
-    paddingTop: 4,
-    paddingBottom: 4,
+  backBtn: {
+    marginLeft: 20,
+    marginTop: 4,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  backButton: { padding: 4 },
   content: {
     flex: 1,
     paddingHorizontal: 24,
@@ -178,10 +184,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 44,
   },
-  heroSection: {
-    alignItems: 'center',
-    gap: 20,
-  },
+  heroSection: { alignItems: 'center', gap: 20 },
   orbitPath: {
     position: 'absolute',
     width: ORBIT_RING,
@@ -245,9 +248,7 @@ const styles = StyleSheet.create({
     lineHeight: 23,
     textAlign: 'center',
   },
-  buttonsSection: {
-    gap: 12,
-  },
+  buttonsSection: { gap: 12 },
   googleButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -264,10 +265,7 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
   },
-  phoneWrapper: {
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
+  phoneWrapper: { borderRadius: 16, overflow: 'hidden' },
   phoneButton: {
     height: 56,
     flexDirection: 'row',
@@ -296,11 +294,15 @@ const styles = StyleSheet.create({
     color: GRAY,
     fontSize: 14,
   },
-  loginText: {
-    fontFamily: 'Inter_500Medium',
-    color: GRAY,
+  signupText: {
+    fontFamily: 'Inter_400Regular',
+    color: BODY,
     fontSize: 15,
     textAlign: 'center',
     paddingVertical: 4,
+  },
+  signupLink: {
+    fontFamily: 'Inter_600SemiBold',
+    color: '#C4B5FD',
   },
 });

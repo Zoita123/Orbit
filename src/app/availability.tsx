@@ -158,7 +158,40 @@ export default function AvailabilityScreen() {
               </Text>
             </View>
 
-            {/* Day selectors at top — quick toggle chips */}
+            {/* Quick presets */}
+            <View style={styles.presetsHeader}>
+              <Text style={styles.presetsLabel}>PRESETS RÁPIDOS</Text>
+              <TouchableOpacity
+                onPress={() => setSchedule(buildDefault())}
+                hitSlop={10}
+              >
+                <Text style={styles.clearBtn}>Limpiar todo</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.presetsRow}>
+              {[
+                { label: 'Lun – Vie', days: ['lun','mar','mie','jue','vie'], from: '09:00', to: '18:00' },
+                { label: 'Todos los días', days: ['lun','mar','mie','jue','vie','sab','dom'], from: '09:00', to: '20:00' },
+                { label: 'Fines de semana', days: ['sab','dom'], from: '10:00', to: '20:00' },
+              ].map((preset) => (
+                <TouchableOpacity
+                  key={preset.label}
+                  style={styles.presetBtn}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    const next = buildDefault();
+                    preset.days.forEach((k) => {
+                      next[k] = { enabled: true, from: preset.from, to: preset.to };
+                    });
+                    setSchedule(next);
+                  }}
+                >
+                  <Text style={styles.presetBtnText}>{preset.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* Day selectors — quick toggle chips */}
             <View style={styles.chipRow}>
               {DAYS.map((d) => (
                 <TouchableOpacity
@@ -226,39 +259,6 @@ export default function AvailabilityScreen() {
                   </View>
                 );
               })}
-            </View>
-
-            {/* Quick presets */}
-            <View style={styles.presetsHeader}>
-              <Text style={styles.presetsLabel}>PRESETS RÁPIDOS</Text>
-              <TouchableOpacity
-                onPress={() => setSchedule(buildDefault())}
-                hitSlop={10}
-              >
-                <Text style={styles.clearBtn}>Limpiar todo</Text>
-              </TouchableOpacity>
-            </View>
-            <View style={styles.presetsRow}>
-              {[
-                { label: 'Lun – Vie', days: ['lun','mar','mie','jue','vie'], from: '09:00', to: '18:00' },
-                { label: 'Todos los días', days: ['lun','mar','mie','jue','vie','sab','dom'], from: '09:00', to: '20:00' },
-                { label: 'Fines de semana', days: ['sab','dom'], from: '10:00', to: '20:00' },
-              ].map((preset) => (
-                <TouchableOpacity
-                  key={preset.label}
-                  style={styles.presetBtn}
-                  activeOpacity={0.7}
-                  onPress={() => {
-                    const next = buildDefault();
-                    preset.days.forEach((k) => {
-                      next[k] = { enabled: true, from: preset.from, to: preset.to };
-                    });
-                    setSchedule(next);
-                  }}
-                >
-                  <Text style={styles.presetBtnText}>{preset.label}</Text>
-                </TouchableOpacity>
-              ))}
             </View>
 
             {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -413,7 +413,7 @@ const styles = StyleSheet.create({
     color: '#F87171',
     fontSize: 12,
   },
-  presetsRow: { flexDirection: 'row', gap: 8, marginBottom: 28 },
+  presetsRow: { flexDirection: 'row', gap: 8, marginBottom: 20 },
   presetBtn: {
     flex: 1,
     height: 38,

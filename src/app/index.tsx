@@ -218,7 +218,7 @@ export default function IntroScreen() {
 
           <Divider />
 
-          <TouchableOpacity activeOpacity={0.6}>
+          <TouchableOpacity activeOpacity={0.6} onPress={() => router.push('/login')}>
             <Text style={styles.loginText}>Iniciar sesión</Text>
           </TouchableOpacity>
         </View>
