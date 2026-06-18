@@ -1,9 +1,8 @@
-import { Feather } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { signInWithGoogle } from '../lib/supabase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { signInWithGoogle, supabase } from '../lib/supabase';
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -21,9 +20,16 @@ const CARD_BG = '#13142A';
 const GRAY = '#9CA3AF';
 const BODY = '#6B7280';
 
-const CONTAINER = 186;
-const ORBIT_RING = 154;
-const LOGO_RING = 116;
+const STARS = Array.from({ length: 60 }, (_, i) => ({
+  left: `${(i * 37 + 13) % 93}%`,
+  top: `${(i * 53 + 7) % 88}%`,
+  size: i % 7 === 0 ? 2.5 : i % 3 === 0 ? 2 : 1.5,
+  opacity: 0.12 + (i % 5) * 0.07,
+}));
+
+const CONTAINER = 172;
+const ORBIT_RING = 142;
+const LOGO_RING = 108;
 const DOT_SIZE = 9;
 const DOT_OFFSET = (CONTAINER - ORBIT_RING) / 2 - DOT_SIZE / 2;
 
@@ -39,6 +45,7 @@ function GoogleLogo({ size = 20 }: { size?: number }) {
 }
 
 function AnimatedOrbitLogo() {
+  "use no memo";
   const angle = useSharedValue(0);
   const pulse = useSharedValue(0);
 
@@ -101,12 +108,41 @@ export default function SignupScreen() {
       return;
     }
     if (data?.session) {
+      const code = await AsyncStorage.getItem('pendingReferralCode');
+      if (code) {
+        await AsyncStorage.removeItem('pendingReferralCode');
+        const userId = data.session.user.id;
+        const { data: referrer } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('referral_code', code)
+          .neq('id', userId)
+          .maybeSingle();
+        if (referrer) {
+          await supabase.from('referrals').insert({
+            referrer_id: referrer.id,
+            referred_id: userId,
+            completed: false,
+          });
+        }
+      }
       router.replace('/home');
     }
   };
 
   return (
     <View style={styles.container}>
+      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} pointerEvents="none">
+        {STARS.map((star, i) => (
+          <View
+            key={i}
+            style={[
+              styles.star,
+              { left: star.left, top: star.top, width: star.size, height: star.size, opacity: star.opacity } as any,
+            ]}
+          />
+        ))}
+      </View>
       <SafeAreaView style={styles.safe}>
         <View style={styles.content}>
           <View style={styles.heroSection}>
@@ -134,25 +170,7 @@ export default function SignupScreen() {
               )}
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.phoneWrapper} activeOpacity={0.85}>
-              <LinearGradient
-                colors={['#7C3AED', '#3B82F6']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={styles.phoneButton}
-              >
-                <Feather name="phone" size={18} color="#FFFFFF" />
-                <Text style={styles.phoneText}>Continuar con teléfono</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-
-            <View style={styles.divider}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>o</Text>
-              <View style={styles.dividerLine} />
-            </View>
-
-            <TouchableOpacity hitSlop={12} onPress={() => router.replace('/login')}>
+            <TouchableOpacity hitSlop={12} onPress={() => router.push('/login')}>
               <Text style={styles.loginText}>Ya tengo una cuenta</Text>
             </TouchableOpacity>
           </View>
@@ -165,6 +183,11 @@ export default function SignupScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
   safe: { flex: 1 },
+  star: {
+    position: 'absolute',
+    borderRadius: 99,
+    backgroundColor: '#FFFFFF',
+  },
   header: {
     paddingHorizontal: 24,
     paddingTop: 4,
@@ -174,13 +197,13 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     paddingHorizontal: 24,
-    paddingBottom: 40,
+    paddingBottom: 32,
     justifyContent: 'center',
-    gap: 44,
+    gap: 32,
   },
   heroSection: {
     alignItems: 'center',
-    gap: 20,
+    gap: 14,
   },
   orbitPath: {
     position: 'absolute',
@@ -209,7 +232,7 @@ const styles = StyleSheet.create({
   },
   logoText: {
     fontFamily: 'SpaceGrotesk_700Bold',
-    fontSize: 27,
+    fontSize: 25,
     color: '#C4B5FD',
     letterSpacing: -0.5,
   },
@@ -234,14 +257,14 @@ const styles = StyleSheet.create({
   headline: {
     fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
-    fontSize: 30,
-    lineHeight: 38,
+    fontSize: 26,
+    lineHeight: 33,
     textAlign: 'center',
   },
   subtext: {
     fontFamily: 'Inter_400Regular',
     color: BODY,
-    fontSize: 15,
+    fontSize: 14,
     lineHeight: 23,
     textAlign: 'center',
   },

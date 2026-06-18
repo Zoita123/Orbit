@@ -277,8 +277,8 @@ const styles = StyleSheet.create({
   headline: {
     fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
-    fontSize: 30,
-    lineHeight: 42,
+    fontSize: 28,
+    lineHeight: 38,
     marginBottom: 14,
   },
   headlineAccent: {
@@ -288,8 +288,8 @@ const styles = StyleSheet.create({
   body: {
     fontFamily: 'Inter_400Regular',
     color: BODY,
-    fontSize: 15,
-    lineHeight: 23,
+    fontSize: 14,
+    lineHeight: 22,
   },
   ctaWrapper: {
     borderRadius: 16,
@@ -303,6 +303,6 @@ const styles = StyleSheet.create({
   ctaText: {
     fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
-    fontSize: 17,
+    fontSize: 16,
   },
 });

@@ -21,7 +21,7 @@ const GRAY = '#94A3B8';
 const TITLE_COLOR = '#C4B5FD';
 const SUBTITLE_COLOR = '#CBD5E1';
 
-const ORBIT_SIZE = Math.min(SW * 0.9, 370);
+const ORBIT_SIZE = Math.min(SW * 0.75, 300);
 const RING_INNER = ORBIT_SIZE * 0.46;
 const RING_MID = ORBIT_SIZE * 0.72;
 const RING_OUTER = ORBIT_SIZE * 0.95;
@@ -62,6 +62,7 @@ function OrbitDot({
   startAngle?: number;
   revealDelay?: number;
 }) {
+  "use no memo";
   const angle = useSharedValue(startAngle);
   const reveal = useSharedValue(0);
 
@@ -154,9 +155,7 @@ function Ring({ size, opacity = 0.25 }: { size: number; opacity?: number }) {
 function Divider() {
   return (
     <View style={styles.divider}>
-      <View style={styles.dividerLine} />
       <Text style={styles.dividerText}>o</Text>
-      <View style={styles.dividerLine} />
     </View>
   );
 }
@@ -257,11 +256,11 @@ const styles = StyleSheet.create({
   },
   orbitTitle: {
     fontFamily: 'SpaceGrotesk_700Bold',
-    fontSize: 72,
+    fontSize: 56,
     fontWeight: '700',
     color: TITLE_COLOR,
     textAlign: 'center',
-    marginBottom: 10,
+    marginBottom: 8,
   },
   orbitSubtitle: {
     fontFamily: 'Inter_400Regular',
@@ -270,7 +269,7 @@ const styles = StyleSheet.create({
     lineHeight: 27,
     textAlign: 'center',
     paddingHorizontal: 24,
-    marginTop: 20,
+    marginTop: 28,
   },
   orbitSubtitleItalic: {
     fontFamily: 'Inter_400Regular',
@@ -279,11 +278,12 @@ const styles = StyleSheet.create({
   },
   buttonsContainer: {
     paddingHorizontal: 24,
-    paddingBottom: 8,
+    paddingBottom: 40,
+    gap: 16,
   },
   button: {
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.18)',
+    borderColor: '#8B5CF6',
     borderRadius: 14,
     height: 62,
     flexDirection: 'row',
@@ -303,10 +303,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
   },
   divider: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingVertical: 10,
   },
   dividerLine: {
     flex: 1,

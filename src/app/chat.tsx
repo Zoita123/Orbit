@@ -424,6 +424,7 @@ export default function ChatScreen() {
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
   const [convItemId, setConvItemId] = useState<string | null>(null);
   const [convOwnerId, setConvOwnerId] = useState<string | null>(null);
+  const [isClosed, setIsClosed] = useState(false);
 
   const listRef = useRef<FlatList>(null);
 
@@ -455,6 +456,13 @@ export default function ChatScreen() {
         setConvItemId(conv.item_id ?? null);
         setConvOwnerId(conv.owner_id ?? null);
       }
+      const { data: res } = await supabase
+        .from('reservations')
+        .select('transaction_status')
+        .eq('conversation_id', id)
+        .eq('status', 'confirmed')
+        .maybeSingle();
+      if (res?.transaction_status === 'completed') setIsClosed(true);
       const { data: msgs } = await fetchMessages(id);
       setMessages(msgs ?? []);
       const lastTheirs = [...(msgs ?? [])].reverse().find((m) => m.sender_id !== user?.id && m.type === 'text');
@@ -693,49 +701,58 @@ export default function ChatScreen() {
           />
 
           <SafeAreaView edges={['bottom']} style={styles.inputSafe}>
-            {quickReplies.length > 0 && (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.quickRow}
-                keyboardShouldPersistTaps="handled"
-              >
-                {quickReplies.map((qr) => (
-                  <TouchableOpacity
-                    key={qr.label}
-                    style={[styles.quickChip, qr.positive && styles.quickChipPositive]}
-                    onPress={() => handleSend(qr.label)}
-                    activeOpacity={0.75}
+            {isClosed ? (
+              <View style={styles.closedBanner}>
+                <Feather name="lock" size={14} color={BODY} />
+                <Text style={styles.closedText}>Conversación cerrada · La transacción fue completada</Text>
+              </View>
+            ) : (
+              <>
+                {quickReplies.length > 0 && (
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.quickRow}
+                    keyboardShouldPersistTaps="handled"
                   >
-                    <Text style={[styles.quickChipText, qr.positive && styles.quickChipTextPositive]}>
-                      {qr.label}
-                    </Text>
+                    {quickReplies.map((qr) => (
+                      <TouchableOpacity
+                        key={qr.label}
+                        style={[styles.quickChip, qr.positive && styles.quickChipPositive]}
+                        onPress={() => handleSend(qr.label)}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={[styles.quickChipText, qr.positive && styles.quickChipTextPositive]}>
+                          {qr.label}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                )}
+                <View style={styles.inputBar}>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Escribí un mensaje…"
+                    placeholderTextColor={BODY}
+                    value={input}
+                    onChangeText={setInput}
+                    multiline
+                    blurOnSubmit={false}
+                  />
+                  <TouchableOpacity
+                    onPress={() => handleSend()}
+                    disabled={!input.trim() || sending}
+                    style={[styles.sendBtn, (!input.trim() || sending) && styles.sendBtnDisabled]}
+                    activeOpacity={0.8}
+                  >
+                    {sending
+                      ? <ActivityIndicator color={BODY} size="small" />
+                      : <Feather name="send" size={18} color={input.trim() ? '#FFF' : BODY} />
+                    }
                   </TouchableOpacity>
-                ))}
-              </ScrollView>
+                </View>
+              </>
             )}
-            <View style={styles.inputBar}>
-              <TextInput
-                style={styles.input}
-                placeholder="Escribí un mensaje…"
-                placeholderTextColor={BODY}
-                value={input}
-                onChangeText={setInput}
-                multiline
-                blurOnSubmit={false}
-              />
-              <TouchableOpacity
-                onPress={() => handleSend()}
-                disabled={!input.trim() || sending}
-                style={[styles.sendBtn, (!input.trim() || sending) && styles.sendBtnDisabled]}
-                activeOpacity={0.8}
-              >
-                {sending
-                  ? <ActivityIndicator color={BODY} size="small" />
-                  : <Feather name="send" size={18} color={input.trim() ? '#FFF' : BODY} />
-                }
-              </TouchableOpacity>
-            </View>
           </SafeAreaView>
         </KeyboardAvoidingView>
       )}
@@ -816,6 +833,8 @@ const styles = StyleSheet.create({
   confirmedHint: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 11, textAlign: 'center' },
 
   inputSafe: { backgroundColor: CARD_BG, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)' },
+  closedBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14, paddingHorizontal: 16 },
+  closedText: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 13, textAlign: 'center' },
   inputBar: { flexDirection: 'row', alignItems: 'flex-end', gap: 10, paddingHorizontal: 16, paddingVertical: 10 },
   input: { flex: 1, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', paddingHorizontal: 16, paddingVertical: 10, color: '#FFFFFF', fontFamily: 'Inter_400Regular', fontSize: 15, maxHeight: 100 },
   sendBtn: { width: 42, height: 42, borderRadius: 21, backgroundColor: PURPLE, alignItems: 'center', justifyContent: 'center' },

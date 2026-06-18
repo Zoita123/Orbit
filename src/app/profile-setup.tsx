@@ -53,12 +53,31 @@ export default function ProfileSetupScreen() {
     if (!form.apellido.trim()) { setError('El apellido es obligatorio'); return; }
     setSaving(true);
     setError('');
+
+    let home_lat: number | null = null;
+    let home_lng: number | null = null;
+    const addr = form.direccion.trim();
+    if (addr) {
+      try {
+        const Location = await import('expo-location');
+        await Location.requestForegroundPermissionsAsync();
+        const results = await Location.geocodeAsync(addr);
+        if (results.length > 0) {
+          home_lat = results[0].latitude;
+          home_lng = results[0].longitude;
+        }
+      } catch {
+        // geocoding failed silently — home detection won't work until address is valid
+      }
+    }
+
     const { error: err } = await upsertProfile({
       nombre: form.nombre.trim(),
       apellido: form.apellido.trim(),
       dni: form.dni.trim(),
       telefono: form.telefono.trim(),
-      direccion: form.direccion.trim(),
+      direccion: addr,
+      ...(home_lat !== null && { home_lat, home_lng }),
     });
     setSaving(false);
     if (err) { setError(err.message); return; }

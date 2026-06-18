@@ -4,6 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -15,7 +16,8 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { addItem, fetchItemById, updateItem } from '../lib/supabase';
+import { Image } from 'expo-image';
+import { addItem, fetchItemById, updateItem, uploadItemImage } from '../lib/supabase';
 
 const BG = '#080A1A';
 const CARD_BG = '#13142A';
@@ -182,7 +184,7 @@ function parseItemForEdit(item: any) {
     return { ...p, enabled: !!found, duration: found?.duration ?? '' };
   });
 
-  return { cat, name, price, priceBN, priceColor, printsBN, printsColor, toolType, customTool, includesDetergent, includesCharger, paperSize, paperType, programs, location: item.location ?? '' };
+  return { cat, name, price, priceBN, priceColor, printsBN, printsColor, toolType, customTool, includesDetergent, includesCharger, paperSize, paperType, programs, location: item.location ?? '', imageUrl: item.image_url ?? null };
 }
 
 const SUGGESTIONS: Record<Category, string[]> = {
@@ -275,6 +277,13 @@ export default function AddItemScreen() {
   const [paperSizeOpen, setPaperSizeOpen] = useState(false);
   const [paperTypeOpen, setPaperTypeOpen] = useState(false);
 
+  // Image
+  const [imageUri, setImageUri] = useState<string | null>(null);
+  const [existingImageUrl, setExistingImageUrl] = useState<string | null>(null);
+
+  // Category dropdown
+  const [categoryOpen, setCategoryOpen] = useState(false);
+
   // Herramienta
   const [toolType, setToolType] = useState('');
   const [customTool, setCustomTool] = useState('');
@@ -303,6 +312,7 @@ export default function AddItemScreen() {
       setPaperSize(p.paperSize);
       setPaperType(p.paperType);
       setPrograms(p.programs);
+      setExistingImageUrl(p.imageUrl);
       setEditLoading(false);
     });
   }, [editId]);
@@ -315,8 +325,47 @@ export default function AddItemScreen() {
     );
   }
 
+  const handlePickImage = async (source: 'camera' | 'gallery') => {
+    try {
+      const IP = await import('expo-image-picker');
+
+      if (source === 'camera') {
+        const { status } = await IP.requestCameraPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Permiso denegado', 'Necesitamos acceso a tu cámara para sacar la foto.');
+          return;
+        }
+        const result = await IP.launchCameraAsync({
+          allowsEditing: true,
+          aspect: [4, 3],
+          quality: 0.8,
+        });
+        if (!result.canceled) setImageUri(result.assets[0].uri);
+      } else {
+        const { status } = await IP.requestMediaLibraryPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Permiso denegado', 'Necesitamos acceso a tu galería.');
+          return;
+        }
+        const result = await IP.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          allowsEditing: true,
+          aspect: [4, 3],
+          quality: 0.8,
+        });
+        if (!result.canceled) setImageUri(result.assets[0].uri);
+      }
+    } catch {
+      Alert.alert(
+        'No disponible en Expo Go',
+        'Para subir fotos necesitás un build de desarrollo. Por ahora podés guardar el producto sin imagen.'
+      );
+    }
+  };
+
   const selectCategory = (c: Category) => {
     setCategory(c);
+    setCategoryOpen(false);
     setName('');
     setNameInputFocused(false);
     setError('');
@@ -361,6 +410,13 @@ export default function AddItemScreen() {
     setSaving(true);
     setError('');
 
+    let imageUrl: string | null = existingImageUrl;
+    if (imageUri) {
+      const { url, error: uploadError } = await uploadItemImage(imageUri);
+      if (uploadError) { setError('Error al subir la imagen. Intentá de nuevo.'); setSaving(false); return; }
+      imageUrl = url;
+    }
+
     const catDef = CATEGORIES.find((c) => c.key === category)!;
     let itemName = name.trim();
     let itemPrice = '';
@@ -402,6 +458,7 @@ export default function AddItemScreen() {
       available: true,
       note: itemNote,
       programs: activePrograms,
+      image_url: imageUrl,
     };
 
     const { error: err } = editId
@@ -433,57 +490,116 @@ export default function AddItemScreen() {
           >
             {/* ── Categoría ── */}
             <Text style={styles.label}>Tipo de producto</Text>
-            <View style={styles.categoryGrid}>
-              {CATEGORIES.map((c) => {
-                const sel = category === c.key;
-                return (
+            {(() => {
+              const sel = CATEGORIES.find((c) => c.key === category)!;
+              return (
+                <View style={styles.categoryDropdownWrap}>
                   <TouchableOpacity
-                    key={c.key}
-                    style={[styles.categoryItem, sel && styles.categoryItemSelected]}
-                    onPress={() => selectCategory(c.key)}
-                    activeOpacity={0.7}
+                    style={[styles.dropdownTrigger, { marginBottom: 0 }, categoryOpen && styles.dropdownTriggerOpen]}
+                    onPress={() => setCategoryOpen((v) => !v)}
+                    activeOpacity={0.8}
                   >
-                    <Feather name={c.icon as any} size={22} color={sel ? '#C4B5FD' : BODY} />
-                    <Text style={[styles.categoryLabel, sel && styles.categoryLabelSelected]}>
-                      {c.label}
-                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                      <Feather name={sel.icon as any} size={17} color="#C4B5FD" />
+                      <Text style={styles.dropdownValue}>{sel.label}</Text>
+                    </View>
+                    <Feather name={categoryOpen ? 'chevron-up' : 'chevron-down'} size={18} color={BODY} />
                   </TouchableOpacity>
-                );
-              })}
-            </View>
+                  {categoryOpen && (
+                    <View style={styles.categoryDropdownList}>
+                      {CATEGORIES.map((c, i) => (
+                        <TouchableOpacity
+                          key={c.key}
+                          style={[styles.dropdownItem, i > 0 && styles.dropdownItemBorder]}
+                          onPress={() => selectCategory(c.key)}
+                          activeOpacity={0.7}
+                        >
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                            <Feather name={c.icon as any} size={16} color={category === c.key ? '#C4B5FD' : BODY} />
+                            <Text style={[styles.dropdownItemText, category === c.key && styles.dropdownItemTextSelected]}>
+                              {c.label}
+                            </Text>
+                          </View>
+                          {category === c.key && <Feather name="check" size={15} color={PURPLE} />}
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+                </View>
+              );
+            })()}
+
+            {/* ── Foto del producto ── */}
+            <Text style={styles.label}>
+              Foto <Text style={styles.labelOptional}>(opcional)</Text>
+            </Text>
+            {(imageUri || existingImageUrl) ? (
+              <View style={styles.imagePreviewWrap}>
+                <Image
+                  source={{ uri: (imageUri || existingImageUrl)! }}
+                  style={styles.imagePreview}
+                  contentFit="cover"
+                />
+                <TouchableOpacity
+                  style={styles.imageRemoveBtn}
+                  onPress={() => imageUri ? setImageUri(null) : setExistingImageUrl(null)}
+                >
+                  <Feather name="x" size={14} color="#FFF" />
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.imagePickerRow}>
+                <TouchableOpacity style={styles.imagePickerBtn} onPress={() => handlePickImage('camera')} activeOpacity={0.8}>
+                  <Feather name="camera" size={20} color={BODY} />
+                  <Text style={styles.imagePickerText}>Cámara</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.imagePickerBtn} onPress={() => handlePickImage('gallery')} activeOpacity={0.8}>
+                  <Feather name="image" size={20} color={BODY} />
+                  <Text style={styles.imagePickerText}>Galería</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
             {/* ── Herramienta: desplegable ── */}
             {category === 'herramienta' && (
               <>
                 <Text style={styles.label}>Tipo de herramienta</Text>
-                <TouchableOpacity
-                  style={[styles.dropdownTrigger, toolOpen && styles.dropdownTriggerOpen]}
-                  onPress={() => setToolOpen((v) => !v)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[styles.dropdownValue, !toolType && { color: BODY }]}>
-                    {toolType || 'Seleccioná una herramienta'}
-                  </Text>
-                  <Feather name={toolOpen ? 'chevron-up' : 'chevron-down'} size={18} color={BODY} />
-                </TouchableOpacity>
+                <View style={styles.categoryDropdownWrap}>
+                  <TouchableOpacity
+                    style={[styles.dropdownTrigger, { marginBottom: 0 }, toolOpen && styles.dropdownTriggerOpen]}
+                    onPress={() => setToolOpen((v) => !v)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.dropdownValue, !toolType && { color: BODY }]}>
+                      {toolType || 'Seleccioná una herramienta'}
+                    </Text>
+                    <Feather name={toolOpen ? 'chevron-up' : 'chevron-down'} size={18} color={BODY} />
+                  </TouchableOpacity>
 
-                {toolOpen && (
-                  <View style={styles.dropdownList}>
-                    {TOOL_OPTIONS.map((t, i) => (
-                      <TouchableOpacity
-                        key={t}
-                        style={[styles.dropdownItem, i > 0 && styles.dropdownItemBorder]}
-                        onPress={() => { setToolType(t); setToolOpen(false); if (t !== 'Otro') setCustomTool(''); }}
-                        activeOpacity={0.7}
+                  {toolOpen && (
+                    <View style={styles.toolDropdownList}>
+                      <ScrollView
+                        keyboardShouldPersistTaps="handled"
+                        showsVerticalScrollIndicator={false}
+                        style={{ maxHeight: 240 }}
                       >
-                        <Text style={[styles.dropdownItemText, toolType === t && styles.dropdownItemTextSelected]}>
-                          {t}
-                        </Text>
-                        {toolType === t && <Feather name="check" size={15} color={PURPLE} />}
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
+                        {TOOL_OPTIONS.map((t, i) => (
+                          <TouchableOpacity
+                            key={t}
+                            style={[styles.dropdownItem, i > 0 && styles.dropdownItemBorder]}
+                            onPress={() => { setToolType(t); setToolOpen(false); if (t !== 'Otro') setCustomTool(''); }}
+                            activeOpacity={0.7}
+                          >
+                            <Text style={[styles.dropdownItemText, toolType === t && styles.dropdownItemTextSelected]}>
+                              {t}
+                            </Text>
+                            {toolType === t && <Feather name="check" size={15} color={PURPLE} />}
+                          </TouchableOpacity>
+                        ))}
+                      </ScrollView>
+                    </View>
+                  )}
+                </View>
 
                 {toolType === 'Otro' && (
                   <TextInput
@@ -801,7 +917,42 @@ const styles = StyleSheet.create({
   label: { fontFamily: 'Inter_600SemiBold', color: GRAY, fontSize: 13, marginBottom: 10, marginTop: 4 },
   labelOptional: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 12 },
 
-  // Category grid — 3 columns × 2 rows
+  categoryDropdownWrap: {
+    marginBottom: 24,
+    zIndex: 100,
+  },
+  categoryDropdownList: {
+    position: 'absolute',
+    top: 54,
+    left: 0,
+    right: 0,
+    backgroundColor: CARD_BG,
+    borderWidth: 1,
+    borderTopWidth: 0,
+    borderColor: PURPLE,
+    borderBottomLeftRadius: 14,
+    borderBottomRightRadius: 14,
+    overflow: 'hidden',
+    zIndex: 100,
+    elevation: 10,
+  },
+  toolDropdownList: {
+    position: 'absolute',
+    top: 54,
+    left: 0,
+    right: 0,
+    backgroundColor: CARD_BG,
+    borderWidth: 1,
+    borderTopWidth: 0,
+    borderColor: PURPLE,
+    borderBottomLeftRadius: 14,
+    borderBottomRightRadius: 14,
+    overflow: 'hidden',
+    zIndex: 100,
+    elevation: 10,
+  },
+
+  // Category grid — 3 columns × 2 rows (kept for reference)
   categoryGrid: {
     flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 24,
   },
@@ -977,6 +1128,30 @@ const styles = StyleSheet.create({
   },
   feedbackText: {
     fontFamily: 'Inter_400Regular', color: GRAY, fontSize: 13, lineHeight: 19, flex: 1,
+  },
+
+  // Image picker
+  imagePickerRow: {
+    flexDirection: 'row', gap: 10, marginBottom: 24,
+  },
+  imagePickerBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+    paddingVertical: 20, backgroundColor: CARD_BG, borderRadius: 14,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', borderStyle: 'dashed',
+  },
+  imagePickerText: {
+    fontFamily: 'Inter_500Medium', color: BODY, fontSize: 14,
+  },
+  imagePreviewWrap: {
+    marginBottom: 24, borderRadius: 14, overflow: 'hidden',
+  },
+  imagePreview: {
+    width: '100%', height: 180,
+  },
+  imageRemoveBtn: {
+    position: 'absolute', top: 8, right: 8,
+    width: 28, height: 28, borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.6)', alignItems: 'center', justifyContent: 'center',
   },
 
   error: { fontFamily: 'Inter_400Regular', color: '#F87171', fontSize: 13, marginBottom: 16 },

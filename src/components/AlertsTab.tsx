@@ -1,11 +1,12 @@
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Animated, LayoutAnimation, Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 import {
   acceptReservation,
-  createNotification,
+  deleteNotification,
   fetchConversations,
   fetchNotifications,
   fetchReservations,
@@ -21,48 +22,6 @@ const PURPLE = '#8B5CF6';
 const GRAY = '#9CA3AF';
 const BODY = '#6B7280';
 const GREEN = '#10B981';
-
-// ─── Mock data ───────────────────────────────────────────────────────────────
-
-const NOTIFS = [
-  {
-    id: '1',
-    icon: 'check-circle' as const,
-    title: 'Reserva confirmada',
-    body: 'Tu reserva del lavarropas con María González está confirmada para hoy a las 10:00',
-    time: 'hace 5 min',
-    unread: true,
-    color: GREEN,
-  },
-  {
-    id: '2',
-    icon: 'calendar' as const,
-    title: 'Recordatorio de hoy',
-    body: 'A las 10:00 retirás el lavarropas de María González en portería',
-    time: 'hace 20 min',
-    unread: true,
-    color: PURPLE,
-  },
-  {
-    id: '3',
-    icon: 'check-circle' as const,
-    title: 'Reserva aceptada',
-    body: 'Carlos Rodríguez aceptó prestarte la escalera el martes de 15:00 a 17:00',
-    time: 'hace 2h',
-    unread: false,
-    color: GREEN,
-  },
-  {
-    id: '4',
-    icon: 'star' as const,
-    title: 'Nueva reseña',
-    body: 'Recibiste 5 estrellas de tu última reserva',
-    time: 'ayer',
-    unread: false,
-    color: '#FBBF24',
-  },
-];
-
 
 // ─── Calendar helpers ─────────────────────────────────────────────────────────
 
@@ -92,7 +51,6 @@ function sameDay(a: Date, b: Date) {
 
 const today = new Date();
 const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
-const dayAfter = new Date(today); dayAfter.setDate(today.getDate() + 2);
 
 const LEND_COLOR    = GREEN;        // prestás → verde
 const BORROW_COLOR  = '#3B82F6';    // te prestan → azul
@@ -113,39 +71,9 @@ type CalEvent = {
   includes?: string[];
   programs?: string[];
   note?: string;
+  completed?: boolean;
 };
 
-const EVENTS: CalEvent[] = [
-  {
-    date: today, name: 'María González', initial: 'M', chatId: '1',
-    item: 'Lavarropas', from: '10:00', to: '12:00', type: 'borrowing',
-    delivery: 'porteria',
-    includes: ['Detergente incluido', 'Suavizante incluido'],
-    programs: ['Diario'],
-    note: 'Retirar en portería a nombre de González. Cualquier duda escribime por el chat.',
-  },
-  {
-    date: today, name: 'Carlos Rodríguez', initial: 'C', chatId: '2',
-    item: 'Escalera', from: '15:00', to: '17:00', type: 'borrowing',
-    delivery: 'espacio_comun',
-    note: 'La escalera está en el SUM del edificio. Llevar DNI para retirarla.',
-  },
-  {
-    date: tomorrow, name: 'Laura Pérez', initial: 'L', chatId: '1',
-    item: 'Lavarropas', from: '09:00', to: '11:00', type: 'lending',
-    delivery: 'envio',
-    includes: ['Sin detergente — traer el propio'],
-    programs: ['Delicado', 'Lana'],
-    note: 'Laura va a coordinar el envío por Rappi. El equipo ya está listo para entregar.',
-  },
-  {
-    date: dayAfter, name: 'Juan Torres', initial: 'J', chatId: '2',
-    item: 'Taladro', from: '14:00', to: '16:00', type: 'borrowing',
-    delivery: 'retiro',
-    includes: ['Incluye broca 8mm y 10mm', 'Incluye extensión eléctrica'],
-    note: 'Pasar por departamento 4B. Llamar timbre dos veces.',
-  },
-];
 
 function eventColor(type: EventType) {
   return type === 'lending' ? LEND_COLOR : BORROW_COLOR;
@@ -157,6 +85,7 @@ function NotifsSection() {
   const [notifs, setNotifs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [actioningId, setActioningId] = useState<string | null>(null);
+  const swipeableRefs = useRef<Record<string, Swipeable | null>>({});
 
   const load = useCallback(async () => {
     const { data } = await fetchNotifications();
@@ -164,7 +93,23 @@ function NotifsSection() {
     setLoading(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  const handleDelete = async (id: string) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setNotifs((prev) => prev.filter((n) => n.id !== id));
+    await deleteNotification(id);
+  };
+
+  const renderRightActions = (id: string) => {
+    return (
+      <TouchableOpacity onPress={() => handleDelete(id)} activeOpacity={0.8} style={s.swipeDeleteWrap}>
+        <View style={s.swipeDelete}>
+          <Feather name="trash-2" size={22} color="#FFF" />
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const handleAccept = async (notif: any) => {
     const res = notif.reservation;
@@ -180,15 +125,6 @@ function NotifsSection() {
       const itemName = res.item?.name ?? 'el ítem';
       const msg = `✅ Reserva confirmada\n${itemName} · ${res.date} · ${res.time_from} – ${res.time_to}${res.program ? `\nPrograma: ${res.program}` : ''}\n\nCoordiná la entrega por este chat.`;
       await sendMessage(updated.conversation_id, msg, 'text');
-      if (res.borrower_id) {
-        await createNotification({
-          userId: res.borrower_id,
-          type: 'reservation',
-          reservationId: res.id,
-          title: 'Reserva confirmada ✅',
-          body: `${itemName} · ${res.date} · ${res.time_from}`,
-        });
-      }
     }
     await markNotificationRead(notif.id);
     setActioningId(null);
@@ -202,16 +138,7 @@ function NotifsSection() {
     const res = notif.reservation;
     if (!res) return;
     setActioningId(notif.id);
-    const { data: updated } = await rejectReservation(res.id);
-    if (res.borrower_id) {
-      await createNotification({
-        userId: res.borrower_id,
-        type: 'reservation',
-        reservationId: res.id,
-        title: 'Solicitud rechazada',
-        body: `${res.item?.name ?? 'Ítem'} · ${res.date} · ${res.time_from}`,
-      });
-    }
+    await rejectReservation(res.id);
     await markNotificationRead(notif.id);
     setActioningId(null);
     load();
@@ -225,30 +152,17 @@ function NotifsSection() {
     return { icon: 'bell', color: PURPLE };
   };
 
-  const useFallback = !loading && notifs.length === 0;
-
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.list}>
       {loading && <ActivityIndicator color={PURPLE} style={{ marginTop: 32 }} />}
 
-      {/* Static demo cards when no real notifications yet */}
-      {useFallback && NOTIFS.map((n) => (
-        <View key={n.id} style={[s.notifCard, n.unread && s.notifCardUnread]}>
-          <View style={[s.notifIconWrap, { backgroundColor: `${n.color}20` }]}>
-            <Feather name={n.icon} size={18} color={n.color} />
-          </View>
-          <View style={{ flex: 1, gap: 3 }}>
-            <View style={s.notifTopRow}>
-              <Text style={s.notifTitle}>{n.title}</Text>
-              {n.unread && <View style={s.unreadDot} />}
-            </View>
-            <Text style={s.notifBody}>{n.body}</Text>
-            <Text style={s.notifTime}>{n.time}</Text>
-          </View>
+      {!loading && notifs.length === 0 && (
+        <View style={s.emptyChats}>
+          <Feather name="bell" size={28} color={BODY} />
+          <Text style={s.emptyText}>No tenés notificaciones{'\n'}por ahora</Text>
         </View>
-      ))}
+      )}
 
-      {/* Real notifications */}
       {notifs.map((n) => {
         const res = n.reservation;
         const isPending = res?.status === 'pending';
@@ -258,8 +172,14 @@ function NotifsSection() {
           ? `${res.borrower.nombre ?? ''} ${res.borrower.apellido ?? ''}`.trim()
           : null;
         return (
+          <View key={n.id} style={{ overflow: 'hidden', borderRadius: 16, marginBottom: 10 }}>
+          <Swipeable
+            ref={(ref) => { swipeableRefs.current[n.id] = ref; }}
+            renderRightActions={isPending ? undefined : () => renderRightActions(n.id)}
+            rightThreshold={60}
+            enabled={!isPending}
+          >
           <View
-            key={n.id}
             style={[s.notifCard, !n.read && s.notifCardUnread, isPending && s.notifCardPending]}
           >
             <View style={[s.notifIconWrap, { backgroundColor: `${color}20` }]}>
@@ -326,6 +246,8 @@ function NotifsSection() {
               )}
             </View>
           </View>
+          </Swipeable>
+          </View>
         );
       })}
 
@@ -376,43 +298,10 @@ function ChatsSection() {
     return last ?? null;
   };
 
-  const mockConv = {
-    id: '1',
-    item: { name: 'Lavarropas' },
-    otherName: 'María González',
-    otherInitial: 'M',
-    lastText: 'Sí, disponible para las 10 am! ¿Lo reservamos? 🙌',
-    time: 'hace 5 min',
-    unread: 1,
-  };
-
   return (
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.list}>
       <Text style={s.sectionLabel}>CONVERSACIONES</Text>
 
-      {/* Mock demo conversation always pinned at top */}
-      <TouchableOpacity
-        style={s.chatCard}
-        activeOpacity={0.75}
-        onPress={() => router.push({ pathname: '/chat', params: { id: mockConv.id } })}
-      >
-        <View style={s.chatAvatar}>
-          <Text style={s.chatAvatarText}>{mockConv.otherInitial}</Text>
-        </View>
-        <View style={{ flex: 1 }}>
-          <View style={s.chatTopRow}>
-            <Text style={s.chatName}>{mockConv.otherName}</Text>
-            <Text style={s.chatTime}>{mockConv.time}</Text>
-          </View>
-          <Text style={s.chatItem}>{mockConv.item.name}</Text>
-          <Text style={s.chatLast} numberOfLines={1}>{mockConv.lastText}</Text>
-        </View>
-        <View style={s.unreadBadge}>
-          <Text style={s.unreadBadgeText}>{mockConv.unread}</Text>
-        </View>
-      </TouchableOpacity>
-
-      {/* Real conversations */}
       {loading ? (
         <ActivityIndicator color={PURPLE} style={{ marginTop: 16 }} />
       ) : (
@@ -532,9 +421,9 @@ function EventDetailModal({ event, onClose }: { event: CalEvent; onClose: () => 
             </View>
             <View style={s.modalInfoDivider} />
             <View style={s.modalInfoCell}>
-              <Feather name="check-circle" size={14} color={GREEN} />
+              <Feather name={event.completed ? 'check-circle' : 'check-circle'} size={14} color={event.completed ? BODY : GREEN} />
               <Text style={s.modalInfoLabel}>Estado</Text>
-              <Text style={[s.modalInfoValue, { color: GREEN }]}>Confirmado</Text>
+              <Text style={[s.modalInfoValue, { color: event.completed ? BODY : GREEN }]}>{event.completed ? 'Completado' : 'Confirmado'}</Text>
             </View>
           </View>
 
@@ -644,6 +533,7 @@ function mapReservationToEvent(res: any, userId: string): CalEvent {
     delivery: res.delivery_method as DeliveryMethod,
     chatId: res.conversation_id,
     programs: res.program ? [res.program] : [],
+    completed: res.transaction_status === 'completed',
   };
 }
 
@@ -651,7 +541,7 @@ function CalendarSection() {
   const [selectedDate, setSelectedDate] = useState(today);
   const [activeEvent, setActiveEvent] = useState<CalEvent | null>(null);
   const [weekBase, setWeekBase] = useState(today);
-  const [events, setEvents] = useState<CalEvent[]>(EVENTS); // start with demo data
+  const [events, setEvents] = useState<CalEvent[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -660,10 +550,9 @@ function CalendarSection() {
       const uid = user?.id ?? null;
       setUserId(uid);
       const { data } = await fetchReservations();
-      if (data && data.length > 0 && uid) {
+      if (data && uid) {
         setEvents(data.map((r: any) => mapReservationToEvent(r, uid)));
       }
-      // if no real reservations, keep the demo EVENTS
     }
     load();
   }, []);
@@ -750,19 +639,19 @@ function CalendarSection() {
         </View>
       ) : (
         dayEvents.map((ev, i) => {
-          const color = eventColor(ev.type);
-          const label = ev.type === 'lending' ? 'Prestás' : 'Te prestan';
+          const color = ev.completed ? BODY : eventColor(ev.type);
+          const label = ev.completed ? 'Completado' : ev.type === 'lending' ? 'Prestás' : 'Te prestan';
           return (
             <TouchableOpacity
               key={i}
-              style={[s.eventCard, { borderLeftColor: color }]}
+              style={[s.eventCard, { borderLeftColor: color }, ev.completed && s.eventCardCompleted]}
               activeOpacity={0.75}
               onPress={() => setActiveEvent(ev)}
             >
               <View style={[s.eventStripe, { backgroundColor: color }]} />
               <View style={{ flex: 1, paddingLeft: 6 }}>
                 <View style={s.eventTopRow}>
-                  <Text style={s.eventName}>{ev.name}</Text>
+                  <Text style={[s.eventName, ev.completed && s.eventNameCompleted]}>{ev.name}</Text>
                   <View style={[s.eventTypePill, { backgroundColor: `${color}22` }]}>
                     <Text style={[s.eventTypeText, { color }]}>{label}</Text>
                   </View>
@@ -796,15 +685,13 @@ type SubTab = 'notifs' | 'chats' | 'cal';
 export default function AlertsTab() {
   const [sub, setSub] = useState<SubTab>('notifs');
 
-  const unreadCount = NOTIFS.filter((n) => n.unread).length;
-
   return (
     <View style={{ flex: 1 }}>
       {/* Sub-tab bar */}
       <View style={s.subBar}>
         {([
-          { key: 'notifs', label: 'Notificaciones', badge: unreadCount },
-          { key: 'chats',  label: 'Chats',          badge: 1 }, // mock María unread
+          { key: 'notifs', label: 'Notificaciones', badge: 0 },
+          { key: 'chats',  label: 'Chats',          badge: 0 },
           { key: 'cal',    label: 'Calendario',     badge: 0 },
         ] as { key: SubTab; label: string; badge: number }[]).map((t) => (
           <TouchableOpacity
@@ -873,12 +760,11 @@ const s = StyleSheet.create({
   // Notifications
   notifCard: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: 14,
     backgroundColor: CARD_BG,
     borderRadius: 16,
     padding: 14,
-    marginBottom: 10,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.06)',
   },
@@ -962,6 +848,18 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 10,
+  },
+  swipeDeleteWrap: {
+    width: 80,
+    paddingLeft: 8,
+    alignSelf: 'stretch',
+  },
+  swipeDelete: {
+    flex: 1,
+    backgroundColor: '#EF4444',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 16,
   },
   notifIconWrap: {
     width: 40,
@@ -1106,6 +1004,8 @@ const s = StyleSheet.create({
     marginLeft: 8,
   },
   eventTypeText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
+  eventCardCompleted: { opacity: 0.55 },
+  eventNameCompleted: { color: GRAY },
   eventItem: { fontFamily: 'Inter_400Regular', color: GRAY, fontSize: 13, marginTop: 0 },
   eventTime: { alignItems: 'flex-end', gap: 1, marginLeft: 8 },
   eventTimeText: { fontFamily: 'Inter_700Bold', fontSize: 14 },

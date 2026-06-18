@@ -6,10 +6,11 @@ import {
 } from '@expo-google-fonts/inter';
 import { SpaceGrotesk_700Bold, useFonts } from '@expo-google-fonts/space-grotesk';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SplashScreen from 'expo-splash-screen';
 import { Stack } from 'expo-router';
 import { useEffect } from 'react';
-import { useColorScheme } from 'react-native';
+import { Linking, useColorScheme } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 SplashScreen.preventAutoHideAsync();
@@ -27,6 +28,14 @@ export default function RootLayout() {
   useEffect(() => {
     if (fontsLoaded) SplashScreen.hideAsync();
   }, [fontsLoaded]);
+
+  useEffect(() => {
+    Linking.getInitialURL().then((url) => {
+      if (!url) return;
+      const match = url.match(/invite\/([A-Z0-9]+)/i);
+      if (match) AsyncStorage.setItem('pendingReferralCode', match[1]);
+    });
+  }, []);
 
   if (!fontsLoaded) return null;
 
@@ -58,10 +67,17 @@ export default function RootLayout() {
             }}
           />
           <Stack.Screen
+            name="login"
+            options={{
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
             name="home"
             options={{
               animation: 'fade',
               animationDuration: 400,
+              gestureEnabled: false,
             }}
           />
           <Stack.Screen
@@ -96,6 +112,24 @@ export default function RootLayout() {
           />
           <Stack.Screen
             name="chat"
+            options={{
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
+            name="history"
+            options={{
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
+            name="help"
+            options={{
+              animation: 'slide_from_right',
+            }}
+          />
+          <Stack.Screen
+            name="invite"
             options={{
               animation: 'slide_from_right',
             }}

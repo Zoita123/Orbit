@@ -1,5 +1,4 @@
 import { Feather } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
@@ -21,9 +20,16 @@ const CARD_BG = '#13142A';
 const GRAY = '#9CA3AF';
 const BODY = '#6B7280';
 
-const CONTAINER = 186;
-const ORBIT_RING = 154;
-const LOGO_RING = 116;
+const STARS = Array.from({ length: 60 }, (_, i) => ({
+  left: `${(i * 37 + 13) % 93}%`,
+  top: `${(i * 53 + 7) % 88}%`,
+  size: i % 7 === 0 ? 2.5 : i % 3 === 0 ? 2 : 1.5,
+  opacity: 0.12 + (i % 5) * 0.07,
+}));
+
+const CONTAINER = 172;
+const ORBIT_RING = 142;
+const LOGO_RING = 108;
 const DOT_SIZE = 9;
 const DOT_OFFSET = (CONTAINER - ORBIT_RING) / 2 - DOT_SIZE / 2;
 
@@ -39,6 +45,7 @@ function GoogleLogo({ size = 20 }: { size?: number }) {
 }
 
 function AnimatedOrbitLogo() {
+  "use no memo";
   const angle = useSharedValue(0);
   const pulse = useSharedValue(0);
 
@@ -99,8 +106,18 @@ export default function LoginScreen() {
 
   return (
     <View style={styles.container}>
+      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} pointerEvents="none">
+        {STARS.map((star, i) => (
+          <View
+            key={i}
+            style={[
+              styles.star,
+              { left: star.left, top: star.top, width: star.size, height: star.size, opacity: star.opacity } as any,
+            ]}
+          />
+        ))}
+      </View>
       <SafeAreaView style={styles.safe}>
-        {/* Back button */}
         <TouchableOpacity
           style={styles.backBtn}
           onPress={() => router.back()}
@@ -136,24 +153,6 @@ export default function LoginScreen() {
               )}
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.phoneWrapper} activeOpacity={0.85}>
-              <LinearGradient
-                colors={['#7C3AED', '#3B82F6']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={styles.phoneButton}
-              >
-                <Feather name="phone" size={18} color="#FFFFFF" />
-                <Text style={styles.phoneText}>Continuar con teléfono</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-
-            <View style={styles.divider}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>o</Text>
-              <View style={styles.dividerLine} />
-            </View>
-
             <TouchableOpacity hitSlop={12} onPress={() => router.push('/onboarding')}>
               <Text style={styles.signupText}>¿No tenés cuenta? <Text style={styles.signupLink}>Unite</Text></Text>
             </TouchableOpacity>
@@ -167,9 +166,16 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
   safe: { flex: 1 },
+  star: {
+    position: 'absolute',
+    borderRadius: 99,
+    backgroundColor: '#FFFFFF',
+  },
   backBtn: {
-    marginLeft: 20,
-    marginTop: 4,
+    position: 'absolute',
+    top: 52,
+    left: 20,
+    zIndex: 10,
     width: 38,
     height: 38,
     borderRadius: 19,
@@ -180,11 +186,11 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     paddingHorizontal: 24,
-    paddingBottom: 40,
+    paddingBottom: 32,
     justifyContent: 'center',
-    gap: 44,
+    gap: 32,
   },
-  heroSection: { alignItems: 'center', gap: 20 },
+  heroSection: { alignItems: 'center', gap: 14 },
   orbitPath: {
     position: 'absolute',
     width: ORBIT_RING,
@@ -212,7 +218,7 @@ const styles = StyleSheet.create({
   },
   logoText: {
     fontFamily: 'SpaceGrotesk_700Bold',
-    fontSize: 27,
+    fontSize: 25,
     color: '#C4B5FD',
     letterSpacing: -0.5,
   },
@@ -237,14 +243,14 @@ const styles = StyleSheet.create({
   headline: {
     fontFamily: 'Inter_700Bold',
     color: '#FFFFFF',
-    fontSize: 30,
-    lineHeight: 38,
+    fontSize: 26,
+    lineHeight: 33,
     textAlign: 'center',
   },
   subtext: {
     fontFamily: 'Inter_400Regular',
     color: BODY,
-    fontSize: 15,
+    fontSize: 14,
     lineHeight: 23,
     textAlign: 'center',
   },

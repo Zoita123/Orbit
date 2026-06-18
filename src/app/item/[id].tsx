@@ -1,12 +1,13 @@
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams, useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Animated,
   Easing,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,13 +16,38 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Svg, { Path, Circle, Rect } from 'react-native-svg';
-import { deleteItem, fetchItemById, fetchItemReservations } from '../../lib/supabase';
+import { deleteItem, fetchItemById, fetchItemReservations, fetchItemReviews } from '../../lib/supabase';
 
 const BG = '#080A1A';
 const CARD_BG = '#13142A';
 const PURPLE = '#8B5CF6';
 const GRAY = '#9CA3AF';
 const BODY = '#6B7280';
+
+function getDateOffset(offset: number) {
+  const d = new Date();
+  d.setDate(d.getDate() + offset);
+  return d.toISOString().split('T')[0];
+}
+
+function generateSlots(durationMin = 60) {
+  const slots: { from: string; to: string }[] = [];
+  let h = 8, m = 0;
+  while (true) {
+    const eMin = m + durationMin;
+    const eH = h + Math.floor(eMin / 60);
+    const eM = eMin % 60;
+    if (eH > 22 || (eH === 22 && eM > 0)) break;
+    slots.push({
+      from: `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`,
+      to:   `${String(eH).padStart(2,'0')}:${String(eM).padStart(2,'0')}`,
+    });
+    h = eH; m = eM;
+  }
+  return slots;
+}
+
+const DAY_LABELS = ['Hoy', 'Mañana', 'Pasado'];
 
 function formatDuration(raw: string): string {
   const min = parseInt(raw);
@@ -39,11 +65,19 @@ const ICON_LABELS: Record<string, string> = {
   'package': 'Otra',
 };
 
-const MOCK_REVIEWS = [
-  { id: 1, name: 'Martina G.', rating: 5, comment: 'Excelente! Muy buen estado, Camila muy amable. Lo recomiendo.', date: 'hace 3 días' },
-  { id: 2, name: 'Santiago R.', rating: 5, comment: 'Todo perfecto, el producto tal como lo describe. Volvería a alquilarlo.', date: 'hace 1 semana' },
-  { id: 3, name: 'Julia M.', rating: 4, comment: 'Muy buena experiencia, súper fácil la coordinación.', date: 'hace 2 semanas' },
-];
+function relativeTime(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `hace ${mins} min`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `hace ${hrs} h`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `hace ${days} día${days > 1 ? 's' : ''}`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 4) return `hace ${weeks} semana${weeks > 1 ? 's' : ''}`;
+  const months = Math.floor(days / 30);
+  return `hace ${months} mes${months > 1 ? 'es' : ''}`;
+}
 
 function Stars({ rating }: { rating: number }) {
   return (
@@ -587,14 +621,19 @@ export default function ItemDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
   const [reservations, setReservations] = useState<any[]>([]);
+  const [reviews, setReviews] = useState<any[]>([]);
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [calendarDay, setCalendarDay] = useState(0);
+  const [selectedRes, setSelectedRes] = useState<any>(null);
 
   useFocusEffect(
     useCallback(() => {
       setLoading(true);
-      Promise.all([fetchItemById(id), fetchItemReservations(id)]).then(
-        ([{ data: itemData }, { data: resData }]) => {
+      Promise.all([fetchItemById(id), fetchItemReservations(id), fetchItemReviews(id)]).then(
+        ([{ data: itemData }, { data: resData }, { data: revData }]) => {
           setItem(itemData);
           setReservations(resData ?? []);
+          setReviews(revData ?? []);
           setLoading(false);
         }
       );
@@ -636,7 +675,9 @@ export default function ItemDetailScreen() {
     );
   }
 
-  const avgRating = (MOCK_REVIEWS.reduce((a, r) => a + r.rating, 0) / MOCK_REVIEWS.length).toFixed(1);
+  const avgRating = reviews.length
+    ? (reviews.reduce((a, r) => a + r.rating, 0) / reviews.length).toFixed(1)
+    : null;
 
   return (
     <View style={styles.container}>
@@ -677,6 +718,152 @@ export default function ItemDetailScreen() {
           )}
         </LinearGradient>
 
+        {/* Calendar toggle button */}
+        <View style={styles.calendarToggleWrap}>
+          <TouchableOpacity
+            style={styles.calendarToggleBtn}
+            activeOpacity={0.75}
+            onPress={() => setShowCalendar(v => !v)}
+          >
+            <Feather name="calendar" size={15} color={PURPLE} />
+            <Text style={styles.calendarToggleText}>
+              {showCalendar ? 'Ocultar disponibilidad' : 'Ver disponibilidad'}
+            </Text>
+            <Feather name={showCalendar ? 'chevron-up' : 'chevron-down'} size={15} color={PURPLE} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Inline calendar */}
+        {showCalendar && (() => {
+          const durationMin = item?.programs?.length > 0
+            ? parseInt(String(item.programs[0].duration ?? 60))
+            : 60;
+          const slots = generateSlots(isNaN(durationMin) ? 60 : durationMin);
+          const selectedDate = getDateOffset(calendarDay);
+          const now = new Date();
+          const nowTime = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+          const realReservations = reservations.filter(r => r.date === selectedDate);
+
+          // Inject mock examples when no real reservations exist for this day
+          const mockReservations = realReservations.length === 0 ? (() => {
+            const future = calendarDay === 0 ? slots.filter(s => s.from > nowTime) : slots;
+            return [
+              future[1] && { id: 'mock-1', date: selectedDate, time_from: future[1].from, time_to: future[1].to, status: 'confirmed', program: item?.programs?.[0]?.name ?? '', borrower: { nombre: 'Martín', apellido: 'G.' } },
+              future[3] && { id: 'mock-2', date: selectedDate, time_from: future[3].from, time_to: future[3].to, status: 'pending',   program: '',                                                                            borrower: { nombre: 'Sofía',  apellido: 'R.' } },
+            ].filter(Boolean);
+          })() : [];
+
+          const dayReservations = [...realReservations, ...mockReservations];
+          const visibleSlots = calendarDay === 0 ? slots.filter(s => s.from > nowTime) : slots;
+
+          return (
+            <View style={styles.calendarCard}>
+              {/* Day tabs */}
+              <View style={styles.calendarDayRow}>
+                {DAY_LABELS.map((label, i) => (
+                  <TouchableOpacity
+                    key={i}
+                    style={[styles.calendarDayTab, calendarDay === i && styles.calendarDayTabActive]}
+                    onPress={() => setCalendarDay(i)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.calendarDayText, calendarDay === i && styles.calendarDayTextActive]}>
+                      {label}
+                    </Text>
+                    <Text style={[styles.calendarDateText, calendarDay === i && styles.calendarDateTextActive]}>
+                      {getDateOffset(i).slice(5).replace('-','/')}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {/* Slots grid */}
+              {visibleSlots.length === 0 ? (
+                <Text style={styles.calendarEmpty}>No quedan turnos disponibles hoy</Text>
+              ) : (
+                <View style={styles.slotsGrid}>
+                  {visibleSlots.map((slot) => {
+                    const res = dayReservations.find(r => r.time_from === slot.from);
+                    const busy = !!res;
+                    return (
+                      <TouchableOpacity
+                        key={slot.from}
+                        style={[styles.slotCell, busy && styles.slotCellBusy]}
+                        activeOpacity={busy ? 0.7 : 1}
+                        onPress={() => busy && setSelectedRes(res)}
+                      >
+                        <Text style={[styles.slotTime, busy && styles.slotTimeBusy]}>
+                          {slot.from}
+                        </Text>
+                        <Text style={[styles.slotStatus, busy && styles.slotStatusBusy]}>
+                          {busy ? (res.borrower?.nombre ?? 'Ocupado') : 'Libre'}
+                        </Text>
+                        {busy && (
+                          <View style={[styles.slotStatusDot, { backgroundColor: res.status === 'confirmed' ? '#10B981' : '#F59E0B' }]} />
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+            </View>
+          );
+        })()}
+
+        {/* Reservation detail modal */}
+        <Modal visible={!!selectedRes} transparent animationType="slide" onRequestClose={() => setSelectedRes(null)}>
+          <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSelectedRes(null)}>
+            <TouchableOpacity activeOpacity={1} style={styles.modalSheet}>
+              <View style={styles.modalHandle} />
+              <Text style={styles.modalTitle}>Detalle de reserva</Text>
+
+              <View style={styles.modalRow}>
+                <Feather name="user" size={15} color={PURPLE} />
+                <Text style={styles.modalLabel}>Vecino</Text>
+                <Text style={styles.modalValue}>
+                  {selectedRes?.borrower?.nombre} {selectedRes?.borrower?.apellido}
+                </Text>
+              </View>
+
+              <View style={styles.modalRow}>
+                <Feather name="calendar" size={15} color={PURPLE} />
+                <Text style={styles.modalLabel}>Fecha</Text>
+                <Text style={styles.modalValue}>
+                  {selectedRes?.date ? new Date(selectedRes.date + 'T12:00:00').toLocaleDateString('es-AR', { weekday: 'long', day: 'numeric', month: 'long' }) : '—'}
+                </Text>
+              </View>
+
+              <View style={styles.modalRow}>
+                <Feather name="clock" size={15} color={PURPLE} />
+                <Text style={styles.modalLabel}>Horario</Text>
+                <Text style={styles.modalValue}>{selectedRes?.time_from} – {selectedRes?.time_to}</Text>
+              </View>
+
+              {selectedRes?.program ? (
+                <View style={styles.modalRow}>
+                  <Feather name="layers" size={15} color={PURPLE} />
+                  <Text style={styles.modalLabel}>Programa</Text>
+                  <Text style={styles.modalValue}>{selectedRes.program}</Text>
+                </View>
+              ) : null}
+
+              <View style={styles.modalRow}>
+                <Feather name="check-circle" size={15} color={selectedRes?.status === 'confirmed' ? '#10B981' : '#F59E0B'} />
+                <Text style={styles.modalLabel}>Estado</Text>
+                <View style={[styles.modalStatusPill, { backgroundColor: selectedRes?.status === 'confirmed' ? 'rgba(16,185,129,0.12)' : 'rgba(245,158,11,0.12)' }]}>
+                  <Text style={[styles.modalStatusText, { color: selectedRes?.status === 'confirmed' ? '#10B981' : '#F59E0B' }]}>
+                    {selectedRes?.status === 'confirmed' ? 'Confirmado' : 'Pendiente'}
+                  </Text>
+                </View>
+              </View>
+
+              <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setSelectedRes(null)} activeOpacity={0.8}>
+                <Text style={styles.modalCloseBtnText}>Cerrar</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </Modal>
+
         <View style={styles.content}>
 
           {/* Badges */}
@@ -687,10 +874,12 @@ export default function ItemDetailScreen() {
                 {item.available ? 'Disponible' : 'En pausa'}
               </Text>
             </View>
-            <View style={styles.badgeRating}>
-              <Feather name="star" size={12} color="#FCD34D" />
-              <Text style={styles.badgeRatingText}>{avgRating} · {MOCK_REVIEWS.length} reseñas</Text>
-            </View>
+            {avgRating && (
+              <View style={styles.badgeRating}>
+                <Feather name="star" size={12} color="#FCD34D" />
+                <Text style={styles.badgeRatingText}>{avgRating} · {reviews.length} reseña{reviews.length !== 1 ? 's' : ''}</Text>
+              </View>
+            )}
           </View>
 
           {/* Name + price */}
@@ -798,29 +987,42 @@ export default function ItemDetailScreen() {
           {/* Reviews */}
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>RESEÑAS</Text>
-            <View style={styles.ratingPill}>
-              <Feather name="star" size={11} color="#FCD34D" />
-              <Text style={styles.ratingPillText}>{avgRating} · {MOCK_REVIEWS.length} reseñas</Text>
-            </View>
+            {avgRating && (
+              <View style={styles.ratingPill}>
+                <Feather name="star" size={11} color="#FCD34D" />
+                <Text style={styles.ratingPillText}>{avgRating} · {reviews.length} reseña{reviews.length !== 1 ? 's' : ''}</Text>
+              </View>
+            )}
           </View>
 
-          {MOCK_REVIEWS.map((review) => (
-            <View key={review.id} style={styles.reviewCard}>
-              <View style={styles.reviewHeader}>
-                <View style={styles.reviewAvatar}>
-                  <Text style={styles.reviewAvatarText}>{review.name[0]}</Text>
-                </View>
-                <View style={{ flex: 1, gap: 3 }}>
-                  <Text style={styles.reviewName}>{review.name}</Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <Stars rating={review.rating} />
-                    <Text style={styles.reviewDate}>{review.date}</Text>
+          {reviews.length === 0 ? (
+            <View style={{ paddingVertical: 16, alignItems: 'center' }}>
+              <Text style={{ fontFamily: 'Inter_400Regular', color: BODY, fontSize: 14 }}>
+                Todavía no hay reseñas
+              </Text>
+            </View>
+          ) : reviews.map((review) => {
+            const firstName = review.reviewer?.nombre ?? '?';
+            const lastInitial = review.reviewer?.apellido?.[0] ?? '';
+            const displayName = `${firstName}${lastInitial ? ` ${lastInitial}.` : ''}`;
+            return (
+              <View key={review.id} style={styles.reviewCard}>
+                <View style={styles.reviewHeader}>
+                  <View style={styles.reviewAvatar}>
+                    <Text style={styles.reviewAvatarText}>{firstName[0]?.toUpperCase()}</Text>
+                  </View>
+                  <View style={{ flex: 1, gap: 3 }}>
+                    <Text style={styles.reviewName}>{displayName}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <Stars rating={review.rating} />
+                      <Text style={styles.reviewDate}>{relativeTime(review.created_at)}</Text>
+                    </View>
                   </View>
                 </View>
+                {review.comment ? <Text style={styles.reviewComment}>{review.comment}</Text> : null}
               </View>
-              <Text style={styles.reviewComment}>{review.comment}</Text>
-            </View>
-          ))}
+            );
+          })}
 
           <View style={{ height: 16 }} />
         </View>
@@ -853,10 +1055,7 @@ export default function ItemDetailScreen() {
           >
             {deleting
               ? <ActivityIndicator color="#F87171" size="small" />
-              : <>
-                  <Feather name="trash-2" size={18} color="#F87171" />
-                  <Text style={styles.deleteBtnText}>Eliminar</Text>
-                </>
+              : <Feather name="trash-2" size={20} color="#F87171" />
             }
           </TouchableOpacity>
         </View>
@@ -1108,7 +1307,140 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(248, 113, 113, 0.08)',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 4,
   },
   deleteBtnText: { fontFamily: 'Inter_600SemiBold', color: '#F87171', fontSize: 10 },
+
+  calendarToggleWrap: { paddingHorizontal: 24, paddingTop: 16, paddingBottom: 4 },
+  calendarToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(139,92,246,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.3)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  calendarToggleText: { fontFamily: 'Inter_600SemiBold', color: PURPLE, fontSize: 14 },
+
+  calendarCard: {
+    marginHorizontal: 24,
+    marginTop: 12,
+    marginBottom: 4,
+    backgroundColor: CARD_BG,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.18)',
+    overflow: 'hidden',
+  },
+  calendarDayRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+  },
+  calendarDayTab: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 12,
+    gap: 2,
+  },
+  calendarDayTabActive: {
+    backgroundColor: 'rgba(139,92,246,0.12)',
+    borderBottomWidth: 2,
+    borderBottomColor: PURPLE,
+  },
+  calendarDayText: { fontFamily: 'Inter_600SemiBold', color: BODY, fontSize: 13 },
+  calendarDayTextActive: { color: '#C4B5FD' },
+  calendarDateText: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 11 },
+  calendarDateTextActive: { color: PURPLE },
+
+  calendarEmpty: {
+    fontFamily: 'Inter_400Regular',
+    color: BODY,
+    fontSize: 13,
+    textAlign: 'center',
+    padding: 20,
+  },
+  slotsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    padding: 12,
+    gap: 8,
+  },
+  slotCell: {
+    width: '30%',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.07)',
+    paddingVertical: 10,
+    alignItems: 'center',
+    gap: 3,
+  },
+  slotCellBusy: {
+    backgroundColor: 'rgba(239,68,68,0.08)',
+    borderColor: 'rgba(239,68,68,0.25)',
+  },
+  slotTime: { fontFamily: 'Inter_700Bold', color: '#FFFFFF', fontSize: 13 },
+  slotTimeBusy: { color: '#F87171' },
+  slotStatus: { fontFamily: 'Inter_400Regular', color: '#10B981', fontSize: 11 },
+  slotStatusBusy: { color: '#F87171' },
+  slotStatusDot: { width: 5, height: 5, borderRadius: 3, marginTop: 2 },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'flex-end',
+  },
+  modalSheet: {
+    backgroundColor: '#13142A',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    paddingBottom: 36,
+    gap: 0,
+  },
+  modalHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignSelf: 'center',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontFamily: 'Inter_700Bold',
+    color: '#FFFFFF',
+    fontSize: 18,
+    marginBottom: 20,
+  },
+  modalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)',
+  },
+  modalLabel: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 14, flex: 1 },
+  modalValue: { fontFamily: 'Inter_600SemiBold', color: '#FFFFFF', fontSize: 14 },
+  modalStatusPill: {
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  modalStatusText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  modalCloseBtn: {
+    marginTop: 24,
+    backgroundColor: 'rgba(139,92,246,0.15)',
+    borderRadius: 14,
+    paddingVertical: 15,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.3)',
+  },
+  modalCloseBtnText: { fontFamily: 'Inter_600SemiBold', color: '#C4B5FD', fontSize: 15 },
 });

@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#0D0E22"/>
+      <stop offset="100%" stop-color="#06071A"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#8B5CF6" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#8B5CF6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="dotGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#C4B5FD" stop-opacity="1"/>
+      <stop offset="60%" stop-color="#8B5CF6" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#7C3AED" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="softGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="dotBlur" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="ringGlow" x="-5%" y="-5%" width="110%" height="110%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Ambient glow in center -->
+  <circle cx="512" cy="512" r="380" fill="url(#glow)"/>
+
+  <!-- Outer subtle orbit path -->
+  <circle cx="512" cy="512" r="340"
+    fill="none"
+    stroke="rgba(139,92,246,0.12)"
+    stroke-width="2"/>
+
+  <!-- Main orbit ring -->
+  <circle cx="512" cy="512" r="300"
+    fill="none"
+    stroke="rgba(139,92,246,0.22)"
+    stroke-width="2.5"
+    filter="url(#ringGlow)"/>
+
+  <!-- Main orbit ring bright -->
+  <circle cx="512" cy="512" r="300"
+    fill="none"
+    stroke="rgba(196,181,253,0.55)"
+    stroke-width="1.5"/>
+
+  <!-- Inner ring -->
+  <circle cx="512" cy="512" r="220"
+    fill="none"
+    stroke="rgba(139,92,246,0.14)"
+    stroke-width="1.5"/>
+
+  <!-- Center circle (logo background) -->
+  <circle cx="512" cy="512" r="175"
+    fill="#0D0F24"/>
+  <circle cx="512" cy="512" r="175"
+    fill="none"
+    stroke="rgba(139,92,246,0.5)"
+    stroke-width="2"/>
+
+  <!-- "orbit" text -->
+  <text
+    x="512"
+    y="540"
+    font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+    font-size="108"
+    font-weight="700"
+    letter-spacing="-3"
+    text-anchor="middle"
+    fill="#C4B5FD">orbit</text>
+
+  <!-- Orbiting dot — positioned at ~320deg on the orbit ring -->
+  <!-- 300 * cos(320°) ≈ 230, 300 * sin(320°) ≈ -193 → (742, 319) -->
+  <!-- Dot glow halo -->
+  <circle cx="742" cy="319" r="38"
+    fill="rgba(139,92,246,0.22)"
+    filter="url(#dotBlur)"/>
+  <!-- Dot outer -->
+  <circle cx="742" cy="319" r="20"
+    fill="#7C3AED"
+    filter="url(#dotBlur)"/>
+  <!-- Dot core -->
+  <circle cx="742" cy="319" r="14"
+    fill="#8B5CF6"/>
+  <!-- Dot highlight -->
+  <circle cx="742" cy="319" r="8"
+    fill="#C4B5FD"/>
+  <circle cx="742" cy="319" r="3"
+    fill="#EDE9FE"/>
+</svg>

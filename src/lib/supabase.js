@@ -202,8 +202,29 @@ export async function fetchNotifications() {
     .order('created_at', { ascending: false });
 }
 
+export async function fetchUnreadNotifCount() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return 0;
+  const { count } = await supabase
+    .from('notifications')
+    .select('*', { count: 'exact', head: true })
+    .eq('user_id', user.id)
+    .neq('read', true);
+  return count ?? 0;
+}
+
+export async function markAllNotificationsRead() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return;
+  await supabase.from('notifications').update({ read: true }).eq('user_id', user.id).eq('read', false);
+}
+
 export async function markNotificationRead(id) {
   return supabase.from('notifications').update({ read: true }).eq('id', id);
+}
+
+export async function deleteNotification(id) {
+  return supabase.from('notifications').delete().eq('id', id);
 }
 
 export async function updateUserLocation(lat, lng) {
@@ -220,7 +241,7 @@ export async function fetchNeighborItems(query = '') {
 
   let q = supabase
     .from('items')
-    .select('*, owner:user_id(id, nombre, apellido, lat, lng), reservations(time_from, time_to, date, status)')
+    .select('*, reservations(time_from, time_to, date, status)')
     .neq('user_id', user.id)
     .order('created_at', { ascending: false });
 
@@ -228,14 +249,31 @@ export async function fetchNeighborItems(query = '') {
     q = q.ilike('name', `%${query.trim()}%`);
   }
 
-  const { data, error } = await q;
-  if (!data) return { data: [], error };
+  const { data: items, error } = await q;
+  if (!items) return { data: [], error };
+
+  // Fetch profiles separately to avoid FK join ambiguity
+  const ownerIds = [...new Set(items.map((i) => i.user_id))];
+  let profiles = [];
+  if (ownerIds.length) {
+    const { data: p1, error: e1 } = await supabase
+      .from('profiles').select('id, nombre, apellido, lat, lng, avatar_url').in('id', ownerIds);
+    if (e1) {
+      // avatar_url column may not exist yet — fallback without it
+      const { data: p2 } = await supabase
+        .from('profiles').select('id, nombre, apellido, lat, lng').in('id', ownerIds);
+      profiles = p2 ?? [];
+    } else {
+      profiles = p1 ?? [];
+    }
+  }
+  const profileMap = Object.fromEntries(profiles.map((p) => [p.id, p]));
 
   const todayStr = new Date().toISOString().split('T')[0];
   const now = new Date();
   const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
-  const annotated = data.map((item) => {
+  const annotated = items.map((item) => {
     const todayRes = (item.reservations ?? []).filter(
       (r) => r.date === todayStr && r.status === 'confirmed'
     );
@@ -245,6 +283,7 @@ export async function fetchNeighborItems(query = '') {
       .sort((a, b) => a.time_from.localeCompare(b.time_from))[0] ?? null;
     return {
       ...item,
+      owner: profileMap[item.user_id] ?? null,
       busyUntil: activeNow?.time_to ?? null,
       nextBusy: nextBusy?.time_from ?? null,
     };
@@ -287,6 +326,16 @@ export async function checkConflict(itemId, date, timeFrom, timeTo) {
   return { conflict: (data?.length ?? 0) > 0, slots: data ?? [], error: null };
 }
 
+export async function syncAvatarUrl() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return;
+  const avatarUrl = user.user_metadata?.avatar_url;
+  if (!avatarUrl) return;
+  await supabase
+    .from('profiles')
+    .upsert({ id: user.id, avatar_url: avatarUrl, updated_at: new Date().toISOString() });
+}
+
 export async function signInWithGoogle() {
   const redirectTo = makeRedirectUri({ scheme: 'orbitapp', path: 'auth/callback' });
 
@@ -295,6 +344,7 @@ export async function signInWithGoogle() {
     options: {
       redirectTo,
       skipBrowserRedirect: true,
+      queryParams: { prompt: 'select_account' },
     },
   });
 
@@ -318,4 +368,268 @@ export async function signInWithGoogle() {
   }
 
   return { data: null, error: new Error('Autenticación cancelada') };
+}
+
+export async function createMPPreference({ itemId, itemName, price, borrowerId }) {
+  const { data, error } = await supabase.functions.invoke('reate-mp-preference', {
+    body: { itemId, itemName, price, borrowerId },
+  });
+  if (error) return { error: error.message };
+  return data;
+}
+
+export async function fetchActiveTransactions() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: [], error: null };
+  const result = await supabase
+    .from('reservations')
+    .select('*, item:item_id(name, icon), owner:owner_id(nombre, apellido), borrower:borrower_id(nombre, apellido)')
+    .eq('status', 'confirmed')
+    .or(`and(owner_id.eq.${user.id},owner_reviewed.eq.false),and(borrower_id.eq.${user.id},borrower_reviewed.eq.false)`)
+    .order('date', { ascending: true });
+  if (result.data) {
+    result.data = result.data.map(r => ({ ...r, isOwner: r.owner_id === user.id }));
+  }
+  return result;
+}
+
+export async function markOwnerReviewed(reservationId) {
+  return supabase.from('reservations').update({ owner_reviewed: true }).eq('id', reservationId);
+}
+
+export async function markBorrowerReviewed(reservationId) {
+  return supabase.from('reservations').update({ borrower_reviewed: true }).eq('id', reservationId);
+}
+
+export async function submitReview({ reservationId, reviewedUserId, rating, comment }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: null, error: new Error('No autenticado') };
+  return supabase
+    .from('reviews')
+    .insert({ reservation_id: reservationId, reviewer_id: user.id, reviewed_user_id: reviewedUserId, rating, comment: comment || null })
+    .select()
+    .single();
+}
+
+export async function addPoints(delta) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return;
+  await supabase.rpc('add_points', { p_user_id: user.id, delta });
+}
+
+export async function fetchUserReviews(userId) {
+  const { data: reviews, error } = await supabase
+    .from('reviews')
+    .select('id, rating, comment, created_at, reviewer_id')
+    .eq('reviewed_user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (!reviews?.length) return { data: [], error };
+
+  const reviewerIds = [...new Set(reviews.map((r) => r.reviewer_id))];
+  const { data: profiles } = await supabase
+    .from('profiles')
+    .select('id, nombre, apellido')
+    .in('id', reviewerIds);
+
+  const profileMap = Object.fromEntries((profiles ?? []).map((p) => [p.id, p]));
+  return {
+    data: reviews.map((r) => ({ ...r, reviewer: profileMap[r.reviewer_id] ?? null })),
+    error,
+  };
+}
+
+export async function fetchItemReviews(itemId) {
+  const { data: reservations } = await supabase
+    .from('reservations')
+    .select('id')
+    .eq('item_id', itemId)
+    .eq('status', 'confirmed');
+
+  if (!reservations?.length) return { data: [], error: null };
+
+  const reservationIds = reservations.map((r) => r.id);
+  const { data: reviews, error } = await supabase
+    .from('reviews')
+    .select('id, rating, comment, created_at, reviewer_id')
+    .in('reservation_id', reservationIds)
+    .order('created_at', { ascending: false });
+
+  if (!reviews?.length) return { data: [], error };
+
+  const reviewerIds = [...new Set(reviews.map((r) => r.reviewer_id))];
+  const { data: profiles } = await supabase
+    .from('profiles')
+    .select('id, nombre, apellido')
+    .in('id', reviewerIds);
+
+  const profileMap = Object.fromEntries((profiles ?? []).map((p) => [p.id, p]));
+  return {
+    data: reviews.map((r) => ({ ...r, reviewer: profileMap[r.reviewer_id] ?? null })),
+    error,
+  };
+}
+
+export async function ensureReferralCode() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('referral_code, nombre')
+    .eq('id', user.id)
+    .maybeSingle();
+  if (profile?.referral_code) return profile.referral_code;
+  const namePart = (profile?.nombre ?? 'USR')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase().padEnd(3, 'X');
+  const idPart = user.id.replace(/-/g, '').slice(0, 4).toUpperCase();
+  const code = `${namePart}${idPart}`;
+  await supabase.from('profiles').update({ referral_code: code }).eq('id', user.id);
+  return code;
+}
+
+export async function fetchReferralStats() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { sent: 0, completed: 0 };
+  const { data, error } = await supabase
+    .from('referrals')
+    .select('completed')
+    .eq('referrer_id', user.id);
+  if (error) return { sent: 0, completed: 0 };
+  const sent = data?.length ?? 0;
+  const completed = data?.filter((r) => r.completed).length ?? 0;
+  return { sent, completed };
+}
+
+export async function fetchMyAverageRating() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+  const { data } = await supabase
+    .from('reviews')
+    .select('rating')
+    .eq('reviewed_user_id', user.id);
+  if (!data?.length) return null;
+  const avg = data.reduce((sum, r) => sum + r.rating, 0) / data.length;
+  return Math.round(avg * 10) / 10;
+}
+
+export async function fetchMonthlyEarnings() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return 0;
+  const now = new Date();
+  const firstDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  const { data } = await supabase
+    .from('reservations')
+    .select('item:item_id(price)')
+    .eq('owner_id', user.id)
+    .eq('status', 'confirmed')
+    .eq('transaction_status', 'completed')
+    .gte('date', firstDay);
+  if (!data?.length) return 0;
+  return data.reduce((sum, r) => {
+    const match = r.item?.price?.match(/\$?(\d+)/);
+    return sum + (match ? parseInt(match[1], 10) : 0);
+  }, 0);
+}
+
+export async function fetchCompletedTransactions() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: [], error: null };
+  const result = await supabase
+    .from('reservations')
+    .select('*, item:item_id(name, icon), owner:owner_id(nombre, apellido), borrower:borrower_id(nombre, apellido)')
+    .eq('status', 'confirmed')
+    .eq('transaction_status', 'completed')
+    .or(`owner_id.eq.${user.id},borrower_id.eq.${user.id}`)
+    .order('date', { ascending: false });
+  if (result.data) {
+    result.data = result.data.map(r => ({ ...r, isOwner: r.owner_id === user.id }));
+  }
+  return result;
+}
+
+export async function advanceTransactionStatus(reservationId, status) {
+  const result = await supabase
+    .from('reservations')
+    .update({ transaction_status: status })
+    .eq('id', reservationId)
+    .select('*, item:item_id(name, icon), owner:owner_id(nombre, apellido), borrower:borrower_id(nombre, apellido)')
+    .single();
+
+  if (status === 'completed' && result.data?.borrower_id) {
+    await supabase.rpc('complete_referral', { p_referred_id: result.data.borrower_id });
+  }
+
+  return result;
+}
+
+export async function reportProblem(reservationId, description) {
+  return supabase
+    .from('reservations')
+    .update({ problem_description: description })
+    .eq('id', reservationId);
+}
+
+export async function fetchRequests() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: [], error: null };
+  const { data: reqs, error } = await supabase
+    .from('requests')
+    .select('id, user_id, description, created_at')
+    .eq('active', true)
+    .order('created_at', { ascending: false });
+  if (!reqs) return { data: [], error };
+  const userIds = [...new Set(reqs.map((r) => r.user_id))];
+  let profiles = [];
+  if (userIds.length) {
+    const { data: p } = await supabase
+      .from('profiles')
+      .select('id, nombre, apellido')
+      .in('id', userIds);
+    profiles = p ?? [];
+  }
+  const profileMap = Object.fromEntries(profiles.map((p) => [p.id, p]));
+  return {
+    data: reqs.map((r) => ({
+      ...r,
+      requester: profileMap[r.user_id] ?? null,
+      isOwn: r.user_id === user.id,
+    })),
+    error,
+  };
+}
+
+export async function createRequest(description) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: null, error: new Error('No autenticado') };
+  return supabase
+    .from('requests')
+    .insert({ user_id: user.id, description })
+    .select()
+    .single();
+}
+
+export async function deleteRequest(id) {
+  return supabase.from('requests').update({ active: false }).eq('id', id);
+}
+
+export async function uploadItemImage(localUri) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { url: null, error: new Error('No autenticado') };
+
+  const ext = localUri.split('.').pop()?.toLowerCase() ?? 'jpg';
+  const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
+  const filename = `${user.id}/${Date.now()}.${ext}`;
+
+  const response = await fetch(localUri);
+  const blob = await response.blob();
+
+  const { error } = await supabase.storage
+    .from('item-images')
+    .upload(filename, blob, { contentType: mime });
+
+  if (error) return { url: null, error };
+
+  const { data } = supabase.storage.from('item-images').getPublicUrl(filename);
+  return { url: data.publicUrl, error: null };
 }
