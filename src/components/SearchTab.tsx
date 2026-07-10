@@ -1,9 +1,10 @@
 import { Feather } from '@expo/vector-icons';
+import { parseRequestDesc } from '../lib/requestUtils';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { useFocusEffect } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -19,13 +20,15 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { type Coords } from '../hooks/useLocation';
 import {
+  acceptOffer,
   checkConflict,
   createMPPreference,
-  createRequest,
   createReservation,
+  declineOffer,
   deleteRequest,
   fetchItemDayReservations,
   fetchNeighborItems,
+  fetchOffersForRequests,
   fetchOrCreateConversation,
   fetchRequests,
   fetchItemReviews,
@@ -75,6 +78,7 @@ const CATEGORIES = [
 
 type CategoryKey = typeof CATEGORIES[number]['key'];
 
+
 function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number) {
   const R = 6371;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -110,11 +114,11 @@ function getNextDays(n: number) {
   });
 }
 
-function generateSlots(durationMin: number): { from: string; to: string }[] {
+function generateHourlySlots(durationMin: number): { from: string; to: string }[] {
   const fmt = (m: number) =>
     `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
   const slots = [];
-  for (let t = 8 * 60; t + durationMin <= 22 * 60; t += durationMin) {
+  for (let t = 8 * 60; t + durationMin <= 22 * 60; t += 60) {
     slots.push({ from: fmt(t), to: fmt(t + durationMin) });
   }
   return slots;
@@ -148,7 +152,8 @@ function formatDateLabel(dateStr: string): string {
 
 
 
-export default function SearchTab({ userCoords }: { userCoords?: Coords | null }) {
+export default function SearchTab({ userCoords, onCatBarLayout }: { userCoords?: Coords | null; onCatBarLayout?: (top: number, bottom: number) => void }) {
+  const catWrapRef = useRef<View>(null);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<CategoryKey>('all');
   const [items, setItems] = useState<any[]>([]);
@@ -167,25 +172,62 @@ export default function SearchTab({ userCoords }: { userCoords?: Coords | null }
   const [showOwnerProfile, setShowOwnerProfile] = useState(false);
   const [itemReviews, setItemReviews] = useState<any[]>([]);
   const [ownerReviews, setOwnerReviews] = useState<any[]>([]);
+  const [detailImageFullscreen, setDetailImageFullscreen] = useState(false);
   const insets = useSafeAreaInsets();
 
   const [viewMode, setViewMode] = useState<'items' | 'pedir' | 'ofrecer'>('items');
   const [requests, setRequests] = useState<any[]>([]);
   const [requestsLoading, setRequestsLoading] = useState(false);
-  const [showNewRequest, setShowNewRequest] = useState(false);
-  const [newRequestText, setNewRequestText] = useState('');
-  const [submittingRequest, setSubmittingRequest] = useState(false);
+  const [offersMap, setOffersMap] = useState<Record<string, any[]>>({});
+
+  const loadOffersForRequests = useCallback(async (reqs: any[]) => {
+    const ownIds = reqs.filter((r) => r.isOwn).map((r) => r.id);
+    if (!ownIds.length) { setOffersMap({}); return; }
+    const { data } = await fetchOffersForRequests(ownIds);
+    const map: Record<string, any[]> = {};
+    for (const offer of (data ?? [])) {
+      if (!map[offer.request_id]) map[offer.request_id] = [];
+      map[offer.request_id].push(offer);
+    }
+    setOffersMap(map);
+  }, []);
 
   const loadRequests = useCallback(async () => {
     setRequestsLoading(true);
-    const { data } = await fetchRequests();
-    setRequests(data ?? []);
+    const { data, error } = await fetchRequests();
+    if (error) console.error('[fetchRequests] error:', JSON.stringify(error));
+    const reqs = data ?? [];
+    setRequests(reqs);
+    await loadOffersForRequests(reqs);
     setRequestsLoading(false);
+  }, [loadOffersForRequests]);
+
+  const handleAcceptOffer = useCallback(async (convId: string, reqId: string) => {
+    const { error } = await acceptOffer(convId, reqId);
+    if (error) { Alert.alert('Error', 'No se pudo aceptar la oferta.'); return; }
+    setRequests((prev) => prev.filter((r) => r.id !== reqId));
+    setOffersMap((prev) => { const next = { ...prev }; delete next[reqId]; return next; });
+    router.push(`/chat?id=${convId}`);
+  }, []);
+
+  const handleDeclineOffer = useCallback(async (convId: string, reqId: string) => {
+    const { error } = await declineOffer(convId);
+    if (error) { Alert.alert('Error', 'No se pudo rechazar.'); return; }
+    setOffersMap((prev) => ({
+      ...prev,
+      [reqId]: (prev[reqId] ?? []).filter((o) => o.id !== convId),
+    }));
   }, []);
 
   useEffect(() => {
     if (viewMode === 'pedir' || viewMode === 'ofrecer') loadRequests();
   }, [viewMode, loadRequests]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (viewMode === 'pedir' || viewMode === 'ofrecer') loadRequests();
+    }, [viewMode, loadRequests])
+  );
 
   useEffect(() => {
     if (detailItem?.id) {
@@ -202,20 +244,6 @@ export default function SearchTab({ userCoords }: { userCoords?: Coords | null }
       setOwnerReviews([]);
     }
   }, [showOwnerProfile, detailItem?.user_id]);
-
-  const handleSubmitRequest = async () => {
-    if (!newRequestText.trim()) return;
-    setSubmittingRequest(true);
-    const { error } = await createRequest(newRequestText.trim());
-    setSubmittingRequest(false);
-    if (error) {
-      Alert.alert('Error', 'No se pudo publicar el pedido.');
-      return;
-    }
-    setNewRequestText('');
-    setShowNewRequest(false);
-    loadRequests();
-  };
 
   const handleDeleteRequest = async (id: string) => {
     setRequests((prev) => prev.filter((r) => r.id !== id));
@@ -239,6 +267,17 @@ export default function SearchTab({ userCoords }: { userCoords?: Coords | null }
       setSlotsLoading(false);
     });
   }, [detailItem?.id, selectedDate, selectedProgram?.name]);
+
+  useEffect(() => {
+    if (detailItem?.price?.includes('/día') && selectedDate) {
+      const now = new Date();
+      const todayStr = now.toISOString().split('T')[0];
+      const startHour = selectedDate === todayStr
+        ? `${String(now.getHours()).padStart(2, '0')}:00`
+        : '08:00';
+      setSelectedSlot({ from: startHour, to: '23:59' });
+    }
+  }, [detailItem?.price, selectedDate]);
 
   useEffect(() => {
     import('react-native-maps')
@@ -433,7 +472,15 @@ export default function SearchTab({ userCoords }: { userCoords?: Coords | null }
       {viewMode === 'items' && (
         <>
       {/* Category chips */}
-      <View style={s.catWrap}>
+      <View
+        ref={catWrapRef}
+        style={s.catWrap}
+        onLayout={() => {
+          catWrapRef.current?.measureInWindow((_, y, __, h) => {
+            onCatBarLayout?.(y, y + h);
+          });
+        }}
+      >
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -689,7 +736,7 @@ export default function SearchTab({ userCoords }: { userCoords?: Coords | null }
           {viewMode === 'pedir' && (
             <TouchableOpacity
               style={s.newReqBtnWrap}
-              onPress={() => setShowNewRequest(true)}
+              onPress={() => router.push('/new-request')}
               activeOpacity={0.85}
             >
               <LinearGradient
@@ -706,105 +753,122 @@ export default function SearchTab({ userCoords }: { userCoords?: Coords | null }
 
           {requestsLoading ? (
             <ActivityIndicator color={PURPLE} style={{ marginTop: 32 }} />
-          ) : (
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.reqList}>
-              {requests.length === 0 ? (
-                <View style={s.empty}>
-                  <Feather name="inbox" size={32} color={BODY} />
-                  <Text style={s.emptyText}>{'Ningún vecino publicó\nun pedido por ahora'}</Text>
-                </View>
-              ) : (
-                requests.map((req) => {
-                  const name = req.isOwn
-                    ? 'Vos'
-                    : `${req.requester?.nombre ?? ''} ${req.requester?.apellido ?? ''}`.trim() || 'Vecino';
-                  const initial = req.isOwn ? 'V' : (req.requester?.nombre?.[0]?.toUpperCase() ?? 'V');
-                  return (
-                    <View key={req.id} style={s.reqCard}>
-                      <View style={s.reqAvatar}>
-                        <Text style={s.reqAvatarText}>{initial}</Text>
-                      </View>
-                      <View style={{ flex: 1, gap: 4 }}>
-                        <Text style={s.reqDescription}>{req.description}</Text>
-                        <View style={s.reqMetaRow}>
-                          {req.isOwn && (
-                            <View style={s.myReqPill}>
-                              <Text style={s.myReqPillText}>Tu pedido</Text>
+          ) : (() => {
+            const filtered = requests.filter((r) => viewMode === 'pedir' ? r.isOwn : !r.isOwn);
+            const emptyText = viewMode === 'pedir'
+              ? 'Todavía no publicaste\nningún pedido'
+              : 'Ningún vecino publicó\nun pedido por ahora';
+            return (
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.reqList}>
+                {filtered.length === 0 ? (
+                  <View style={s.empty}>
+                    <Feather name="inbox" size={32} color={BODY} />
+                    <Text style={s.emptyText}>{emptyText}</Text>
+                  </View>
+                ) : (
+                  filtered.map((req) => {
+                    const name = req.isOwn
+                      ? 'Vos'
+                      : `${req.requester?.nombre ?? ''} ${req.requester?.apellido ?? ''}`.trim() || 'Vecino';
+                    const initial = req.isOwn ? 'V' : (req.requester?.nombre?.[0]?.toUpperCase() ?? 'V');
+                    const { cat, text: reqText } = parseRequestDesc(req.description);
+                    const onPress = !req.isOwn
+                      ? () => router.push({ pathname: '/respond-request', params: { requestId: req.id, requesterId: req.user_id, description: req.description } })
+                      : undefined;
+                    const reqOffers = req.isOwn ? (offersMap[req.id] ?? []) : [];
+                    return (
+                      <View key={req.id}>
+                      <TouchableOpacity style={s.reqCard} onPress={onPress} activeOpacity={onPress ? 0.75 : 1} disabled={!onPress}>
+                        <View style={s.reqAvatar}>
+                          <Text style={s.reqAvatarText}>{initial}</Text>
+                        </View>
+                        <View style={{ flex: 1, gap: 6 }}>
+                          {cat && (
+                            <View style={[s.reqCatChip, { backgroundColor: `${cat.color}18`, borderColor: `${cat.color}40` }]}>
+                              <Feather name={cat.icon as any} size={11} color={cat.color} />
+                              <Text style={[s.reqCatChipText, { color: cat.color }]}>{cat.label}</Text>
                             </View>
                           )}
-                          <Text style={s.reqName}>{name}</Text>
-                          <Text style={s.reqDot}>·</Text>
-                          <Text style={s.reqTime}>{reqRelativeTime(req.created_at)}</Text>
+                          <Text style={s.reqDescription}>{reqText}</Text>
+                          <View style={s.reqMetaRow}>
+                            <Text style={s.reqName}>{name}</Text>
+                            <Text style={s.reqDot}>·</Text>
+                            <Text style={s.reqTime}>{reqRelativeTime(req.created_at)}</Text>
+                            {reqOffers.length > 0 && (
+                              <View style={s.offerBadge}>
+                                <Text style={s.offerBadgeText}>{reqOffers.length} oferta{reqOffers.length > 1 ? 's' : ''}</Text>
+                              </View>
+                            )}
+                          </View>
                         </View>
+                        {req.isOwn && (
+                          <TouchableOpacity
+                            onPress={() => handleDeleteRequest(req.id)}
+                            hitSlop={12}
+                            activeOpacity={0.7}
+                          >
+                            <Feather name="trash-2" size={16} color={BODY} />
+                          </TouchableOpacity>
+                        )}
+                        {!req.isOwn && (
+                          <Feather name="chevron-right" size={16} color={BODY} />
+                        )}
+                      </TouchableOpacity>
+
+                      {reqOffers.map((offer) => {
+                        const offerer = offer.offerer;
+                        const offererName = `${offerer?.nombre ?? ''} ${offerer?.apellido ?? ''}`.trim() || 'Vecino';
+                        const offererInitial = offerer?.nombre?.[0]?.toUpperCase() ?? 'V';
+                        const msgs = (offer.messages ?? []).sort((a: any, b: any) => a.created_at > b.created_at ? 1 : -1);
+                        const textMsg = msgs.find((m: any) => m.type === 'text' || !m.type)?.content;
+                        const imgUrl = msgs.find((m: any) => m.type === 'image')?.content;
+                        const dist = userCoords && offerer?.lat && offerer?.lng
+                          ? haversineKm(userCoords.latitude, userCoords.longitude, offerer.lat, offerer.lng)
+                          : null;
+                        return (
+                          <View key={offer.id} style={s.offerCard}>
+                            <View style={s.offerHeader}>
+                              <View style={s.offerAvatar}>
+                                {offerer?.avatar_url ? (
+                                  <Image source={{ uri: offerer.avatar_url }} style={s.offerAvatarImg} />
+                                ) : (
+                                  <Text style={s.offerAvatarText}>{offererInitial}</Text>
+                                )}
+                              </View>
+                              <View style={{ flex: 1 }}>
+                                <Text style={s.offerName}>{offererName} puede ayudarte</Text>
+                                {dist !== null && (
+                                  <Text style={s.offerDist}>
+                                    <Feather name="map-pin" size={11} color={BODY} /> {dist < 1 ? `${Math.round(dist * 1000)} m` : `${dist.toFixed(1)} km`}
+                                  </Text>
+                                )}
+                              </View>
+                            </View>
+                            {textMsg ? <Text style={s.offerText} numberOfLines={3}>{textMsg}</Text> : null}
+                            {imgUrl ? <Image source={{ uri: imgUrl }} style={s.offerImg} resizeMode="cover" /> : null}
+                            <View style={s.offerActions}>
+                              <TouchableOpacity style={s.offerDeclineBtn} onPress={() => handleDeclineOffer(offer.id, req.id)} activeOpacity={0.8}>
+                                <Text style={s.offerDeclineText}>Rechazar</Text>
+                              </TouchableOpacity>
+                              <TouchableOpacity style={s.offerAcceptWrap} onPress={() => handleAcceptOffer(offer.id, req.id)} activeOpacity={0.85}>
+                                <LinearGradient colors={['#7C3AED', '#3B82F6']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={s.offerAcceptBtn}>
+                                  <Text style={s.offerAcceptText}>Aceptar</Text>
+                                </LinearGradient>
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+                        );
+                      })}
                       </View>
-                      {req.isOwn && (
-                        <TouchableOpacity
-                          onPress={() => handleDeleteRequest(req.id)}
-                          hitSlop={12}
-                          activeOpacity={0.7}
-                        >
-                          <Feather name="trash-2" size={16} color={BODY} />
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  );
-                })
-              )}
-              <View style={{ height: 24 }} />
-            </ScrollView>
-          )}
+                    );
+                  })
+                )}
+                <View style={{ height: 24 }} />
+              </ScrollView>
+            );
+          })()}
         </View>
       )}
-
-      {/* ── New request modal ── */}
-      <Modal
-        visible={showNewRequest}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowNewRequest(false)}
-      >
-        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
-          <TouchableOpacity
-            style={StyleSheet.absoluteFill}
-            activeOpacity={1}
-            onPress={() => setShowNewRequest(false)}
-          />
-          <View style={[s.newReqSheet, { paddingBottom: insets.bottom + 20 }]}>
-            <View style={s.newReqHandle} />
-            <Text style={s.newReqTitle}>¿Qué necesitás?</Text>
-            <Text style={s.newReqSub}>Contale a tus vecinos lo que estás buscando</Text>
-            <TextInput
-              style={s.newReqInput}
-              placeholder="Ej: Necesito un martillo para el finde"
-              placeholderTextColor={BODY}
-              value={newRequestText}
-              onChangeText={setNewRequestText}
-              multiline
-              maxLength={200}
-              autoFocus
-            />
-            <Text style={s.newReqCount}>{newRequestText.length}/200</Text>
-            <TouchableOpacity
-              style={[s.newReqSubmitWrap, !newRequestText.trim() && { opacity: 0.4 }]}
-              onPress={handleSubmitRequest}
-              disabled={submittingRequest || !newRequestText.trim()}
-              activeOpacity={0.85}
-            >
-              <LinearGradient
-                colors={['#7C3AED', '#3B82F6']}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={s.newReqSubmitBtn}
-              >
-                {submittingRequest
-                  ? <ActivityIndicator color="#FFF" />
-                  : <Text style={s.newReqSubmitText}>Publicar pedido</Text>
-                }
-              </LinearGradient>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
 
       {/* ── Item detail modal (full screen) ── */}
       <Modal
@@ -813,17 +877,6 @@ export default function SearchTab({ userCoords }: { userCoords?: Coords | null }
         onRequestClose={() => { setDetailItem(null); setShowPayment(false); setShowOwnerProfile(false); }}
       >
         <View style={dm.container}>
-          <View style={[dm.topBar, { paddingTop: insets.top + 12 }]}>
-            <TouchableOpacity
-              onPress={() => { setDetailItem(null); setShowPayment(false); setShowOwnerProfile(false); }}
-              style={dm.backBtn}
-              hitSlop={12}
-            >
-              <Feather name="arrow-left" size={20} color={GRAY} />
-            </TouchableOpacity>
-            <Text style={dm.topBarTitle} numberOfLines={1}>{detailItem?.name ?? ''}</Text>
-            <View style={{ width: 36 }} />
-          </View>
 
           {/* Payment panel — absolute overlay */}
           {showPayment && (
@@ -844,11 +897,8 @@ export default function SearchTab({ userCoords }: { userCoords?: Coords | null }
                   </View>
                   <View style={{ flex: 1, gap: 3 }}>
                     <Text style={pay.summaryName}>{detailItem?.name}</Text>
-                    {selectedDate && (
-                      <Text style={pay.summaryMeta}>
-                        {formatDateLabel(selectedDate)}
-                        {selectedSlot ? `  ·  ${selectedSlot.from} – ${selectedSlot.to}` : ''}
-                      </Text>
+                    {detailItem?.note && (
+                      <Text style={pay.summaryNote}>{detailItem.note}</Text>
                     )}
                     {selectedProgram && (
                       <Text style={pay.summaryProgram}>{selectedProgram.name}</Text>
@@ -857,6 +907,33 @@ export default function SearchTab({ userCoords }: { userCoords?: Coords | null }
                   <View style={pay.pricePill}>
                     <Text style={pay.priceText}>{detailItem?.price ?? 'Gratis'}</Text>
                   </View>
+                </View>
+
+                {selectedDate && selectedSlot && (() => {
+                  const isDaily = detailItem?.price?.includes('/día');
+                  if (isDaily) {
+                    const startLabel = formatDateLabel(selectedDate);
+                    const endDate = new Date(selectedDate + 'T12:00:00');
+                    endDate.setDate(endDate.getDate() + 1);
+                    const endLabel = formatDateLabel(endDate.toISOString().split('T')[0]);
+                    return (
+                      <Text style={pay.dateRangeText}>
+                        {`desde ${startLabel} ${selectedSlot.from} hasta ${endLabel} ${selectedSlot.from}`}
+                      </Text>
+                    );
+                  }
+                  return (
+                    <Text style={pay.dateRangeText}>
+                      {`${formatDateLabel(selectedDate)} · ${selectedSlot.from} – ${selectedSlot.to}`}
+                    </Text>
+                  );
+                })()}
+
+                <View style={pay.reminderBanner}>
+                  <Feather name="message-circle" size={16} color="#7C3AED" />
+                  <Text style={pay.reminderText}>
+                    {`¡Recordá acordar con ${detailItem?.owner?.nombre ?? 'el dueño'} el punto y horario de entrega por chat!`}
+                  </Text>
                 </View>
 
                 <Text style={pay.sectionLabel}>MÉTODO DE PAGO</Text>
@@ -998,37 +1075,39 @@ export default function SearchTab({ userCoords }: { userCoords?: Coords | null }
 
           <ScrollView
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={[dm.scrollContent, { paddingBottom: insets.bottom + 28 }]}
+            contentContainerStyle={{ paddingBottom: insets.bottom + 120 }}
           >
-            {/* Hero icon */}
-            <View style={dm.hero}>
-              <View style={dm.heroGlow} />
-              <View style={dm.heroIconWrap}>
-                <Feather name={detailItem?.icon as any} size={56} color="#C4B5FD" />
-              </View>
-            </View>
+            {/* Hero */}
+            {detailItem?.image_url ? (
+              <TouchableOpacity activeOpacity={0.92} onPress={() => setDetailImageFullscreen(true)}>
+                <Image source={{ uri: detailItem.image_url }} style={dm.heroImage} resizeMode="cover" />
+              </TouchableOpacity>
+            ) : (
+              <LinearGradient colors={['#1C1040', '#0D0E22']} style={dm.hero}>
+                <View style={dm.heroGlow} />
+                <View style={dm.heroIconWrap}>
+                  <Feather name={detailItem?.icon as any} size={56} color="#C4B5FD" />
+                </View>
+              </LinearGradient>
+            )}
+
+            {/* Content card */}
+            <View style={dm.contentCard}>
+            <View style={dm.scrollContent}>
 
             {/* Name + price + badges */}
             <View style={dm.namePriceBlock}>
               <Text style={dm.itemNameLarge}>{detailItem?.name}</Text>
               <View style={dm.headerMeta}>
                 {detailItem?.price ? (
-                  <View style={dm.pricePill}>
-                    <Text style={dm.priceText}>{detailItem?.price}</Text>
-                  </View>
+                  <Text style={dm.priceSubtext}>{detailItem?.price}</Text>
                 ) : null}
-                {detailItem?.icon === 'refresh-cw' && (
-                  <View style={[dm.detergentBadge, detailItem?.note === 'Sin detergente' && dm.detergentBadgeNo]}>
-                    <Feather
-                      name={detailItem?.note === 'Sin detergente' ? 'x-circle' : 'check-circle'}
-                      size={11}
-                      color={detailItem?.note === 'Sin detergente' ? BODY : '#10B981'}
-                    />
-                    <Text style={[dm.detergentText, detailItem?.note === 'Sin detergente' && dm.detergentTextNo]}>
-                      {detailItem?.note === 'Sin detergente' ? 'Sin detergente' : 'Incluye detergente'}
-                    </Text>
-                  </View>
-                )}
+                {detailItem?.price && detailItem?.note ? (
+                  <Text style={dm.metaDot}>·</Text>
+                ) : null}
+                {detailItem?.note ? (
+                  <Text style={dm.noteSubtext}>{detailItem.note}</Text>
+                ) : null}
               </View>
             </View>
 
@@ -1172,7 +1251,7 @@ export default function SearchTab({ userCoords }: { userCoords?: Coords | null }
                     contentContainerStyle={dm.dateRow}
                     style={{ marginBottom: 16 }}
                   >
-                    {getNextDays(7).map((day) => {
+                    {getNextDays(3).map((day) => {
                       const isSel = selectedDate === day.value;
                       return (
                         <TouchableOpacity
@@ -1185,6 +1264,14 @@ export default function SearchTab({ userCoords }: { userCoords?: Coords | null }
                         </TouchableOpacity>
                       );
                     })}
+                    <TouchableOpacity
+                      style={dm.dateChipMore}
+                      activeOpacity={0.75}
+                      onPress={() => Alert.alert('Más fechas', 'Por ahora solo podés reservar hasta 2 días a futuro.')}
+                    >
+                      <Feather name="calendar" size={13} color={BODY} />
+                      <Text style={dm.dateChipMoreText}>Más fechas</Text>
+                    </TouchableOpacity>
                   </ScrollView>
                 </>
               );
@@ -1195,8 +1282,35 @@ export default function SearchTab({ userCoords }: { userCoords?: Coords | null }
               const hasPrograms = (detailItem?.programs ?? []).length > 0;
               if (hasPrograms && !selectedProgram) return null;
               if (!selectedDate) return null;
+              const isDaily = detailItem?.price?.includes('/día');
+              if (isDaily) {
+                const now = new Date();
+                const todayStr = now.toISOString().split('T')[0];
+                const startHour = selectedDate === todayStr
+                  ? `${String(now.getHours()).padStart(2, '0')}:00`
+                  : '08:00';
+                const endDate = new Date(selectedDate + 'T12:00:00');
+                endDate.setDate(endDate.getDate() + 1);
+                const endDateStr = endDate.toISOString().split('T')[0];
+                const endLabel = formatDateLabel(endDateStr);
+                const busy = isSlotBusy({ from: startHour, to: '23:59' }, busySlots);
+                return (
+                  <>
+                    <Text style={dm.sectionLabel}>DURACIÓN</Text>
+                    <View style={[dm.fullDayRow, busy && { backgroundColor: 'rgba(107,114,128,0.08)', borderColor: 'rgba(107,114,128,0.2)' }]}>
+                      <Feather name="clock" size={15} color={busy ? BODY : GREEN} />
+                      <Text style={[dm.fullDayText, busy && { color: BODY }]}>
+                        {busy
+                          ? 'No disponible este día'
+                          : `${startHour} → ${endLabel} ${startHour}`}
+                      </Text>
+                      {!busy && <Feather name="check-circle" size={15} color={GREEN} />}
+                    </View>
+                  </>
+                );
+              }
               const durationMin = selectedProgram ? parseInt(String(selectedProgram.duration)) : 60;
-              const slots = generateSlots(durationMin);
+              const slots = generateHourlySlots(durationMin);
               const todayStr = new Date().toISOString().split('T')[0];
               const now = new Date();
               const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -1232,19 +1346,24 @@ export default function SearchTab({ userCoords }: { userCoords?: Coords | null }
               );
             })()}
 
-            {/* Reserve button */}
-            {detailItem?.available !== false && (() => {
-              const hasPrograms = (detailItem?.programs ?? []).length > 0;
-              const programOk = !hasPrograms || !!selectedProgram;
-              const ready = programOk && !!selectedDate && !!selectedSlot;
-              const label = !programOk
-                ? 'Seleccioná un programa'
-                : !selectedDate
-                ? 'Elegí una fecha'
-                : !selectedSlot
-                ? 'Elegí un horario'
-                : `Confirmar · ${formatDateLabel(selectedDate)} · ${selectedSlot.from}`;
-              return (
+            </View>{/* /scrollContent */}
+            </View>{/* /contentCard */}
+          </ScrollView>
+
+          {/* Fixed bottom reserve button */}
+          {detailItem?.available !== false && (() => {
+            const hasPrograms = (detailItem?.programs ?? []).length > 0;
+            const programOk = !hasPrograms || !!selectedProgram;
+            const ready = programOk && !!selectedDate && !!selectedSlot;
+            const label = !programOk
+              ? 'Seleccioná un programa'
+              : !selectedDate
+              ? 'Elegí una fecha'
+              : !selectedSlot
+              ? 'Elegí un horario'
+              : 'Confirmar';
+            return (
+              <View style={[dm.reserveBar, { paddingBottom: insets.bottom + 12 }]}>
                 <TouchableOpacity
                   style={dm.reserveWrapper}
                   activeOpacity={ready ? 0.85 : 1}
@@ -1267,9 +1386,36 @@ export default function SearchTab({ userCoords }: { userCoords?: Coords | null }
                     )}
                   </LinearGradient>
                 </TouchableOpacity>
-              );
-            })()}
-          </ScrollView>
+              </View>
+            );
+          })()}
+
+          {/* Fullscreen image modal */}
+          {detailItem?.image_url ? (
+            <Modal visible={detailImageFullscreen} transparent animationType="fade" onRequestClose={() => setDetailImageFullscreen(false)}>
+              <TouchableOpacity style={dm.fullscreenOverlay} activeOpacity={1} onPress={() => setDetailImageFullscreen(false)}>
+                <Image source={{ uri: detailItem.image_url }} style={dm.fullscreenImage} resizeMode="contain" />
+                <View style={[dm.fullscreenBottom, { paddingBottom: insets.bottom + 24 }]} pointerEvents="box-none">
+                  <TouchableOpacity style={dm.fullscreenCloseBtn} onPress={() => setDetailImageFullscreen(false)} activeOpacity={0.8}>
+                    <Feather name="x" size={20} color="#FFFFFF" />
+                    <Text style={dm.fullscreenCloseText}>Cerrar</Text>
+                  </TouchableOpacity>
+                </View>
+              </TouchableOpacity>
+            </Modal>
+          ) : null}
+
+          {/* Overlay back button */}
+          <View style={[dm.heroOverlaySafe, { paddingTop: insets.top + 8 }]} pointerEvents="box-none">
+            <View style={dm.heroOverlayRow} pointerEvents="box-none">
+              <TouchableOpacity
+                onPress={() => { setDetailItem(null); setShowPayment(false); setShowOwnerProfile(false); setDetailImageFullscreen(false); }}
+                style={dm.overlayBtn}
+              >
+                <Feather name="arrow-left" size={20} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       </Modal>
 
@@ -1772,6 +1918,17 @@ const s = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
+  reqCatChip: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  reqCatChipText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
   reqMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 5, flexWrap: 'wrap' },
   reqName: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 12 },
   reqDot: { color: BODY, fontSize: 12 },
@@ -1842,6 +1999,53 @@ const s = StyleSheet.create({
     gap: 8,
   },
   newReqSubmitText: { fontFamily: 'Inter_700Bold', color: '#FFF', fontSize: 16 },
+
+  offerBadge: {
+    backgroundColor: 'rgba(139,92,246,0.2)',
+    borderRadius: 10,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  offerBadgeText: { fontFamily: 'Inter_600SemiBold', color: '#C4B5FD', fontSize: 11 },
+
+  offerCard: {
+    backgroundColor: '#0F1022',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(139,92,246,0.2)',
+    padding: 14,
+    marginBottom: 10,
+    gap: 10,
+  },
+  offerHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  offerAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(139,92,246,0.18)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  offerAvatarImg: { width: 36, height: 36, borderRadius: 18 },
+  offerAvatarText: { fontFamily: 'Inter_700Bold', color: '#C4B5FD', fontSize: 14 },
+  offerName: { fontFamily: 'Inter_600SemiBold', color: '#FFFFFF', fontSize: 13 },
+  offerDist: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 12, marginTop: 1 },
+  offerText: { fontFamily: 'Inter_400Regular', color: GRAY, fontSize: 13, lineHeight: 19 },
+  offerImg: { width: '100%', height: 160, borderRadius: 10 },
+  offerActions: { flexDirection: 'row', gap: 10 },
+  offerDeclineBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    alignItems: 'center',
+  },
+  offerDeclineText: { fontFamily: 'Inter_600SemiBold', color: GRAY, fontSize: 14 },
+  offerAcceptWrap: { flex: 1, borderRadius: 10, overflow: 'hidden' },
+  offerAcceptBtn: { paddingVertical: 10, alignItems: 'center' },
+  offerAcceptText: { fontFamily: 'Inter_600SemiBold', color: '#FFF', fontSize: 14 },
 });
 
 // ─── Modal styles ─────────────────────────────────────────────────────────────
@@ -1930,31 +2134,15 @@ const m = StyleSheet.create({
 const dm = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
 
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 4,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.06)',
-  },
-  backBtn: {
-    width: 36, height: 36, borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  topBarTitle: {
-    fontFamily: 'Inter_600SemiBold', color: '#FFFFFF', fontSize: 16,
-    flex: 1, textAlign: 'center', marginHorizontal: 8,
-  },
-
   hero: {
-    height: 200,
+    height: 300,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#0D0E22',
+    overflow: 'hidden',
+  },
+  heroImage: {
+    width: '100%',
+    height: 300,
   },
   heroGlow: {
     position: 'absolute',
@@ -1968,14 +2156,77 @@ const dm = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
 
+  contentCard: {
+    backgroundColor: BG,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    marginTop: -28,
+  },
   scrollContent: { paddingHorizontal: 20, paddingTop: 20 },
 
-  namePriceBlock: { marginBottom: 14 },
+  heroOverlaySafe: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+  },
+  heroOverlayRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  overlayBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.42)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  fullscreenOverlay: {
+    flex: 1,
+    backgroundColor: '#000000',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fullscreenImage: {
+    width: '100%',
+    height: '100%',
+  },
+  fullscreenBottom: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  fullscreenCloseBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 30,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  fullscreenCloseText: {
+    fontFamily: 'Inter_600SemiBold',
+    color: '#FFFFFF',
+    fontSize: 15,
+  },
+
+  namePriceBlock: { marginBottom: 14, alignItems: 'center' },
   itemNameLarge: {
     fontFamily: 'Inter_700Bold', color: '#FFFFFF', fontSize: 22,
-    lineHeight: 28, marginBottom: 8,
+    lineHeight: 28, marginBottom: 6, textAlign: 'center',
   },
-  headerMeta: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 },
+  headerMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap', gap: 6 },
+  priceSubtext: { fontFamily: 'Inter_700Bold', color: '#C4B5FD', fontSize: 14 },
+  metaDot: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 13 },
+  noteSubtext: { fontFamily: 'Inter_400Regular', color: GRAY, fontSize: 13 },
   pricePill: {
     alignSelf: 'flex-start',
     backgroundColor: 'rgba(139,92,246,0.15)',
@@ -1994,10 +2245,10 @@ const dm = StyleSheet.create({
 
   ownerRow: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 14,
+    borderTopWidth: 1, borderBottomWidth: 1,
+    borderColor: 'rgba(255,255,255,0.07)',
     marginBottom: 20,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderRadius: 14, padding: 12,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
   },
   ownerAvatar: {
     width: 38, height: 38, borderRadius: 19,
@@ -2070,7 +2321,18 @@ const dm = StyleSheet.create({
   },
   noteText: { flex: 1, fontFamily: 'Inter_400Regular', color: '#9CA3AF', fontSize: 13, lineHeight: 20 },
 
-  reserveWrapper: { borderRadius: 16, overflow: 'hidden', marginTop: 12 },
+  reserveBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    backgroundColor: BG,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.07)',
+  },
+  reserveWrapper: { borderRadius: 16, overflow: 'hidden' },
   reserveBtn: {
     height: 54, flexDirection: 'row',
     alignItems: 'center', justifyContent: 'center', gap: 8,
@@ -2088,8 +2350,24 @@ const dm = StyleSheet.create({
   dateChipSelected: { backgroundColor: 'rgba(139,92,246,0.22)', borderColor: '#8B5CF6' },
   dateChipText: { fontFamily: 'Inter_500Medium', color: GRAY, fontSize: 13 },
   dateChipTextSel: { fontFamily: 'Inter_600SemiBold', color: '#C4B5FD' },
+  dateChipMore: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 14, paddingVertical: 9,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
+    borderStyle: 'dashed',
+  },
+  dateChipMoreText: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 13 },
 
-  slotsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
+  slotsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16, justifyContent: 'center' },
+  fullDayRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: 'rgba(16,185,129,0.08)',
+    borderWidth: 1, borderColor: 'rgba(16,185,129,0.25)',
+    borderRadius: 14, padding: 14, marginBottom: 16,
+  },
+  fullDayText: { fontFamily: 'Inter_600SemiBold', color: GREEN, fontSize: 14, flex: 1 },
   slotChip: {
     width: 68, paddingVertical: 9, borderRadius: 10,
     backgroundColor: 'rgba(139,92,246,0.08)',
@@ -2152,6 +2430,7 @@ const pay = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   summaryName: { fontFamily: 'Inter_700Bold', color: '#FFFFFF', fontSize: 15 },
+  summaryNote: { fontFamily: 'Inter_400Regular', color: '#6B7280', fontSize: 12 },
   summaryMeta: { fontFamily: 'Inter_400Regular', color: '#9CA3AF', fontSize: 13 },
   summaryProgram: {
     fontFamily: 'Inter_500Medium', color: '#C4B5FD', fontSize: 12,
@@ -2226,6 +2505,35 @@ const pay = StyleSheet.create({
     color: '#6B7280',
     fontSize: 14,
     textDecorationLine: 'underline',
+  },
+  dateRangeText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 15,
+    color: '#E2E8F0',
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#2D2D4E',
+    paddingVertical: 14,
+    marginBottom: 14,
+  },
+  reminderBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#1E1040',
+    borderLeftWidth: 3,
+    borderLeftColor: '#7C3AED',
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginBottom: 18,
+  },
+  reminderText: {
+    flex: 1,
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: '#C4B5FD',
+    lineHeight: 18,
   },
 });
 

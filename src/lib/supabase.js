@@ -54,6 +54,36 @@ export async function updateItem(id, item) {
 }
 
 export async function deleteItem(id) {
+  // Fetch reservation IDs for this item first
+  const { data: reservations } = await supabase
+    .from('reservations')
+    .select('id')
+    .eq('item_id', id);
+
+  if (reservations?.length) {
+    const reservationIds = reservations.map((r) => r.id);
+    // Delete notifications linked to those reservations
+    await supabase.from('notifications').delete().in('reservation_id', reservationIds);
+    // Delete reviews linked to those reservations
+    await supabase.from('reviews').delete().in('reservation_id', reservationIds);
+    // Delete the reservations themselves
+    await supabase.from('reservations').delete().eq('item_id', id);
+  }
+
+  // Fetch conversation IDs for this item
+  const { data: conversations } = await supabase
+    .from('conversations')
+    .select('id')
+    .eq('item_id', id);
+
+  if (conversations?.length) {
+    const conversationIds = conversations.map((c) => c.id);
+    // Delete messages in those conversations
+    await supabase.from('messages').delete().in('conversation_id', conversationIds);
+    // Delete the conversations
+    await supabase.from('conversations').delete().eq('item_id', id);
+  }
+
   return supabase.from('items').delete().eq('id', id);
 }
 
@@ -80,7 +110,7 @@ export async function fetchConversation(conversationId) {
   if (!user) return { data: null, error: null };
   return supabase
     .from('conversations')
-    .select('*, item:item_id(name), owner:owner_id(nombre, apellido), borrower:borrower_id(nombre, apellido)')
+    .select('*, item:item_id(name), owner:owner_id(nombre, apellido, avatar_url), borrower:borrower_id(nombre, apellido, avatar_url)')
     .eq('id', conversationId)
     .single();
 }
@@ -90,9 +120,14 @@ export async function fetchConversations() {
   if (!user) return { data: [], error: null };
   return supabase
     .from('conversations')
-    .select('*, item:item_id(name), owner:owner_id(nombre, apellido), borrower:borrower_id(nombre, apellido), messages(content, created_at, read, sender_id)')
+    .select('*, item:item_id(name), owner:owner_id(nombre, apellido, avatar_url), borrower:borrower_id(nombre, apellido, avatar_url), messages(content, created_at, read, sender_id), reservations(transaction_status, status)')
     .or(`owner_id.eq.${user.id},borrower_id.eq.${user.id}`)
     .order('created_at', { ascending: false });
+}
+
+export async function deleteConversation(conversationId) {
+  await supabase.from('messages').delete().eq('conversation_id', conversationId);
+  return supabase.from('conversations').delete().eq('id', conversationId);
 }
 
 export async function fetchOrCreateConversation(itemId, ownerId) {
@@ -122,6 +157,17 @@ export async function fetchMessages(conversationId) {
     .select('*')
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: true });
+}
+
+export async function markMessagesRead(conversationId) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return;
+  return supabase
+    .from('messages')
+    .update({ read: true })
+    .eq('conversation_id', conversationId)
+    .neq('sender_id', user.id)
+    .eq('read', false);
 }
 
 export async function sendMessage(conversationId, content, type = 'text') {
@@ -439,6 +485,25 @@ export async function fetchUserReviews(userId) {
   };
 }
 
+export async function fetchItemStats(itemId) {
+  const { data, error } = await supabase
+    .from('reservations')
+    .select('time_from, time_to')
+    .eq('item_id', itemId)
+    .eq('status', 'confirmed');
+
+  if (error || !data?.length) return { uses: 0, totalMinutes: 0 };
+
+  const uses = data.length;
+  const totalMinutes = data.reduce((sum, r) => {
+    const [fh, fm] = r.time_from.split(':').map(Number);
+    const [th, tm] = r.time_to.split(':').map(Number);
+    return sum + (th * 60 + tm) - (fh * 60 + fm);
+  }, 0);
+
+  return { uses, totalMinutes };
+}
+
 export async function fetchItemReviews(itemId) {
   const { data: reservations } = await supabase
     .from('reservations')
@@ -613,22 +678,155 @@ export async function deleteRequest(id) {
   return supabase.from('requests').update({ active: false }).eq('id', id);
 }
 
-export async function uploadItemImage(localUri) {
+export async function countPendingOffers(requestId) {
+  const { count, error } = await supabase
+    .from('conversations')
+    .select('*', { count: 'exact', head: true })
+    .eq('request_id', requestId)
+    .eq('offer_status', 'pending');
+  return { count: count ?? 0, error };
+}
+
+export async function fetchOffersForRequests(requestIds) {
+  if (!requestIds.length) return { data: [], error: null };
+  const { data: convs, error } = await supabase
+    .from('conversations')
+    .select('id, request_id, owner_id, offer_status, messages(content, type, created_at)')
+    .in('request_id', requestIds)
+    .eq('offer_status', 'pending');
+  if (!convs) return { data: [], error };
+  const offererIds = [...new Set(convs.map((c) => c.owner_id))];
+  let profiles = [];
+  if (offererIds.length) {
+    const { data: p } = await supabase
+      .from('profiles')
+      .select('id, nombre, apellido, avatar_url, lat, lng')
+      .in('id', offererIds);
+    profiles = p ?? [];
+  }
+  const profileMap = Object.fromEntries(profiles.map((p) => [p.id, p]));
+  return { data: convs.map((c) => ({ ...c, offerer: profileMap[c.owner_id] ?? null })), error: null };
+}
+
+export async function acceptOffer(conversationId, requestId) {
   const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { url: null, error: new Error('No autenticado') };
+  if (!user) return { error: new Error('No autenticado') };
+  const { data: otherConvs } = await supabase
+    .from('conversations')
+    .select('id')
+    .eq('request_id', requestId)
+    .neq('id', conversationId)
+    .eq('offer_status', 'pending');
+  for (const conv of (otherConvs ?? [])) {
+    await supabase.from('messages').insert({
+      conversation_id: conv.id,
+      sender_id: user.id,
+      content: '¡El vecino ya consiguió lo que buscaba! Gracias por ofrecer 🎉',
+      type: 'system',
+    });
+    await supabase.from('conversations').update({ offer_status: 'declined' }).eq('id', conv.id);
+  }
+  await supabase.from('conversations').update({ offer_status: 'accepted' }).eq('id', conversationId);
+  await supabase.from('requests').update({ active: false }).eq('id', requestId);
+  return { error: null };
+}
+
+export async function declineOffer(conversationId) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: new Error('No autenticado') };
+  await supabase.from('messages').insert({
+    conversation_id: conversationId,
+    sender_id: user.id,
+    content: 'Gracias por ofrecer, por ahora voy a seguir buscando.',
+    type: 'text',
+  });
+  const { error } = await supabase
+    .from('conversations')
+    .update({ offer_status: 'declined' })
+    .eq('id', conversationId);
+  return { error };
+}
+
+export async function createRequestConversation(requestId, requesterId) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { data: null, error: new Error('No autenticado') };
+
+  const { data: existing } = await supabase
+    .from('conversations')
+    .select('*')
+    .eq('request_id', requestId)
+    .eq('owner_id', user.id)
+    .eq('borrower_id', requesterId)
+    .maybeSingle();
+
+  if (existing) return { data: existing, error: null };
+
+  return supabase
+    .from('conversations')
+    .insert({ request_id: requestId, owner_id: user.id, borrower_id: requesterId })
+    .select()
+    .single();
+}
+
+export async function uploadMessageImage(localUri) {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { url: null, error: new Error('No autenticado') };
+
+  const ext = localUri.split('.').pop()?.split('?')[0]?.toLowerCase() ?? 'jpg';
+  const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
+  const filename = `messages/${session.user.id}/${Date.now()}.${ext}`;
+
+  const formData = new FormData();
+  formData.append('file', { uri: localUri, name: filename.split('/').pop(), type: mime });
+
+  const response = await fetch(
+    `${SUPABASE_URL}/storage/v1/object/item-images/${filename}`,
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'apikey': SUPABASE_ANON_KEY,
+      },
+      body: formData,
+    }
+  );
+
+  if (!response.ok) {
+    const body = await response.text();
+    return { url: null, error: new Error(body) };
+  }
+
+  const { data } = supabase.storage.from('item-images').getPublicUrl(filename);
+  return { url: data.publicUrl, error: null };
+}
+
+export async function uploadItemImage(localUri) {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) return { url: null, error: new Error('No autenticado') };
 
   const ext = localUri.split('.').pop()?.toLowerCase() ?? 'jpg';
   const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
-  const filename = `${user.id}/${Date.now()}.${ext}`;
+  const filename = `${session.user.id}/${Date.now()}.${ext}`;
 
-  const response = await fetch(localUri);
-  const blob = await response.blob();
+  const formData = new FormData();
+  formData.append('file', { uri: localUri, name: filename.split('/').pop(), type: mime });
 
-  const { error } = await supabase.storage
-    .from('item-images')
-    .upload(filename, blob, { contentType: mime });
+  const response = await fetch(
+    `${SUPABASE_URL}/storage/v1/object/item-images/${filename}`,
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'apikey': SUPABASE_ANON_KEY,
+      },
+      body: formData,
+    }
+  );
 
-  if (error) return { url: null, error };
+  if (!response.ok) {
+    const body = await response.text();
+    return { url: null, error: new Error(body) };
+  }
 
   const { data } = supabase.storage.from('item-images').getPublicUrl(filename);
   return { url: data.publicUrl, error: null };

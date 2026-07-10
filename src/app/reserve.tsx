@@ -4,6 +4,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -145,9 +146,13 @@ export default function ReserveScreen() {
 
           {/* Item summary */}
           <View style={styles.itemCard}>
-            <View style={styles.itemIconWrap}>
-              <Feather name={item.icon} size={24} color="#C4B5FD" />
-            </View>
+            {item.image_url ? (
+              <Image source={{ uri: item.image_url }} style={styles.itemThumb} resizeMode="cover" />
+            ) : (
+              <View style={styles.itemIconWrap}>
+                <Feather name={item.icon} size={24} color="#C4B5FD" />
+              </View>
+            )}
             <View style={{ flex: 1 }}>
               <Text style={styles.itemName}>{item.name}</Text>
               {item.price ? <Text style={styles.itemPrice}>{item.price}</Text> : null}
@@ -333,9 +338,12 @@ const styles = StyleSheet.create({
     padding: 16, marginBottom: 28,
   },
   itemIconWrap: {
-    width: 48, height: 48, borderRadius: 14,
+    width: 56, height: 56, borderRadius: 14,
     backgroundColor: 'rgba(139,92,246,0.15)',
     alignItems: 'center', justifyContent: 'center',
+  },
+  itemThumb: {
+    width: 56, height: 56, borderRadius: 14,
   },
   itemName: { fontFamily: 'Inter_600SemiBold', color: '#FFFFFF', fontSize: 16, marginBottom: 3 },
   itemPrice: { fontFamily: 'Inter_400Regular', color: '#C4B5FD', fontSize: 14 },

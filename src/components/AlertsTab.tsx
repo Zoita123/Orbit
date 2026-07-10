@@ -2,14 +2,16 @@ import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, LayoutAnimation, Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Image, LayoutAnimation, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Swipeable } from 'react-native-gesture-handler';
 import {
   acceptReservation,
+  deleteConversation,
   deleteNotification,
   fetchConversations,
   fetchNotifications,
   fetchReservations,
+  fetchUserReviews,
   markNotificationRead,
   rejectReservation,
   sendMessage,
@@ -22,6 +24,31 @@ const PURPLE = '#8B5CF6';
 const GRAY = '#9CA3AF';
 const BODY = '#6B7280';
 const GREEN = '#10B981';
+
+// ─── Date helpers ─────────────────────────────────────────────────────────────
+
+function formatDayShort(dateStr: string): string {
+  const todayStr = new Date().toISOString().split('T')[0];
+  const tomorrowStr = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+  if (dateStr === todayStr) return 'Hoy';
+  if (dateStr === tomorrowStr) return 'Mañana';
+  const d = new Date(dateStr + 'T12:00:00');
+  const weekday = d.toLocaleDateString('es-AR', { weekday: 'long' });
+  return weekday.charAt(0).toUpperCase() + weekday.slice(1);
+}
+
+function formatReservationRange(res: any): string {
+  if (!res?.date) return '';
+  const label = formatDayShort(res.date);
+  const isDaily = res.time_to === '23:59';
+  if (isDaily) {
+    const nextDay = new Date(res.date + 'T12:00:00');
+    nextDay.setDate(nextDay.getDate() + 1);
+    const nextLabel = formatDayShort(nextDay.toISOString().split('T')[0]);
+    return `${label} ${res.time_from} → ${nextLabel} ${res.time_from}`;
+  }
+  return `${label} · ${res.time_from} – ${res.time_to}`;
+}
 
 // ─── Calendar helpers ─────────────────────────────────────────────────────────
 
@@ -81,11 +108,111 @@ function eventColor(type: EventType) {
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
+function BorrowerProfileModal({ borrowerId, name, initial, currentUserId, onClose }: {
+  borrowerId: string;
+  name: string;
+  initial: string;
+  currentUserId: string | null;
+  onClose: () => void;
+}) {
+  const [reviews, setReviews] = useState<any[]>([]);
+  const [hasHistory, setHasHistory] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      const [{ data: revs }, histResult] = await Promise.all([
+        fetchUserReviews(borrowerId),
+        currentUserId
+          ? supabase.from('reservations').select('id').eq('borrower_id', borrowerId).eq('owner_id', currentUserId).eq('status', 'confirmed').limit(1)
+          : Promise.resolve({ data: [] }),
+      ]);
+      setReviews(revs ?? []);
+      setHasHistory(((histResult as any).data?.length ?? 0) > 0);
+      setLoading(false);
+    }
+    load();
+  }, [borrowerId, currentUserId]);
+
+  const avgRating = reviews.length
+    ? reviews.reduce((sum, r) => sum + (r.rating ?? 0), 0) / reviews.length
+    : null;
+
+  return (
+    <Modal transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={s.modalBackdrop} onPress={onClose} />
+      <View style={s.modalSheet}>
+        <View style={s.modalHandle} />
+
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 8 }}>
+          <TouchableOpacity onPress={onClose} hitSlop={12}>
+            <Feather name="x" size={20} color={GRAY} />
+          </TouchableOpacity>
+        </View>
+
+        <View style={{ alignItems: 'center', marginBottom: 20 }}>
+          <View style={s.borrowerAvatar}>
+            <Text style={s.borrowerAvatarText}>{initial}</Text>
+          </View>
+          <Text style={s.borrowerName}>{name}</Text>
+
+          {hasHistory && (
+            <View style={s.historyBadge}>
+              <Feather name="repeat" size={12} color={GREEN} />
+              <Text style={s.historyBadgeText}>Ya reservaron juntos antes</Text>
+            </View>
+          )}
+
+          {avgRating !== null && (
+            <View style={s.ratingRow}>
+              <Feather name="star" size={14} color="#F59E0B" />
+              <Text style={s.ratingText}>{avgRating.toFixed(1)}</Text>
+              <Text style={s.ratingCount}>({reviews.length} {reviews.length === 1 ? 'reseña' : 'reseñas'})</Text>
+            </View>
+          )}
+        </View>
+
+        {loading && <ActivityIndicator color={PURPLE} style={{ marginVertical: 12 }} />}
+
+        {!loading && reviews.length === 0 && (
+          <Text style={{ color: BODY, fontFamily: 'Inter_400Regular', fontSize: 13, textAlign: 'center', paddingVertical: 12 }}>
+            Todavía no tiene reseñas
+          </Text>
+        )}
+
+        <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 260 }}>
+          {reviews.map((r, i) => (
+            <View key={r.id} style={[s.reviewRow, i > 0 && s.reviewRowBorder]}>
+              <View style={s.reviewHeader}>
+                <Text style={s.reviewerName}>
+                  {r.reviewer ? `${r.reviewer.nombre} ${r.reviewer.apellido ?? ''}`.trim() : 'Vecino'}
+                </Text>
+                <View style={s.reviewStars}>
+                  {Array.from({ length: 5 }, (_, si) => (
+                    <Feather key={si} name="star" size={11} color={si < (r.rating ?? 0) ? '#F59E0B' : BODY} />
+                  ))}
+                </View>
+              </View>
+              {r.comment ? <Text style={s.reviewComment}>{r.comment}</Text> : null}
+            </View>
+          ))}
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+}
+
 function NotifsSection() {
   const [notifs, setNotifs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [actioningId, setActioningId] = useState<string | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [borrowerModal, setBorrowerModal] = useState<{ borrowerId: string; name: string; initial: string } | null>(null);
   const swipeableRefs = useRef<Record<string, Swipeable | null>>({});
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setCurrentUserId(data.user?.id ?? null));
+  }, []);
 
   const load = useCallback(async () => {
     const { data } = await fetchNotifications();
@@ -153,6 +280,7 @@ function NotifsSection() {
   };
 
   return (
+    <>
     <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.list}>
       {loading && <ActivityIndicator color={PURPLE} style={{ marginTop: 32 }} />}
 
@@ -171,6 +299,9 @@ function NotifsSection() {
         const borrowerName = res?.borrower
           ? `${res.borrower.nombre ?? ''} ${res.borrower.apellido ?? ''}`.trim()
           : null;
+        const borrowerInitial = res?.borrower?.nombre?.[0]?.toUpperCase() ?? 'V';
+        const dateRange = formatReservationRange(res);
+
         return (
           <View key={n.id} style={{ overflow: 'hidden', borderRadius: 16, marginBottom: 10 }}>
           <Swipeable
@@ -179,34 +310,56 @@ function NotifsSection() {
             rightThreshold={60}
             enabled={!isPending}
           >
-          <View
-            style={[s.notifCard, !n.read && s.notifCardUnread, isPending && s.notifCardPending]}
-          >
+          <View style={[s.notifCard, !n.read && s.notifCardUnread, isPending && s.notifCardPending]}>
             <View style={[s.notifIconWrap, { backgroundColor: `${color}20` }]}>
               <Feather name={icon} size={18} color={color} />
             </View>
-            <View style={{ flex: 1, gap: 4 }}>
-              <View style={s.notifTopRow}>
-                <Text style={s.notifTitle}>{n.title}</Text>
-                {!n.read && (
-                  <View style={[s.unreadDot, isPending && { backgroundColor: '#F59E0B' }]} />
-                )}
-              </View>
-              {borrowerName && isPending && (
-                <Text style={s.notifBorrower}>{borrowerName} quiere reservar</Text>
-              )}
-              <Text style={s.notifBody}>{n.body}</Text>
-              {res && (
-                <View style={s.notifResRow}>
-                  <Feather name="calendar" size={11} color={BODY} />
-                  <Text style={s.notifResText}>{res.date} · {res.time_from} – {res.time_to}</Text>
-                  {res.program ? (
-                    <View style={s.notifResPill}>
-                      <Text style={s.notifResProg}>{res.program}</Text>
+
+            <View style={{ flex: 1, gap: 5 }}>
+              {isPending && borrowerName ? (
+                <>
+                  <View style={s.notifTopRow}>
+                    <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}>
+                      <TouchableOpacity
+                        onPress={() => setBorrowerModal({ borrowerId: res.borrower_id, name: borrowerName, initial: borrowerInitial })}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={s.notifBorrowerLink}>{borrowerName}</Text>
+                      </TouchableOpacity>
+                      <Text style={s.notifBorrowerSuffix}>quiere reservar tu ítem</Text>
+                    </View>
+                    {!n.read && <View style={[s.unreadDot, { backgroundColor: '#F59E0B' }]} />}
+                  </View>
+                  <Text style={s.notifItemName}>{res.item?.name}</Text>
+                  {dateRange ? (
+                    <View style={s.notifResRow}>
+                      <Feather name="clock" size={11} color={BODY} />
+                      <Text style={s.notifResText}>{dateRange}</Text>
+                      {res.program ? (
+                        <View style={s.notifResPill}><Text style={s.notifResProg}>{res.program}</Text></View>
+                      ) : null}
                     </View>
                   ) : null}
-                </View>
+                </>
+              ) : (
+                <>
+                  <View style={s.notifTopRow}>
+                    <Text style={s.notifTitle}>{n.title}</Text>
+                    {!n.read && <View style={s.unreadDot} />}
+                  </View>
+                  <Text style={s.notifBody}>{n.body}</Text>
+                  {res && dateRange ? (
+                    <View style={s.notifResRow}>
+                      <Feather name="calendar" size={11} color={BODY} />
+                      <Text style={s.notifResText}>{dateRange}</Text>
+                      {res.program ? (
+                        <View style={s.notifResPill}><Text style={s.notifResProg}>{res.program}</Text></View>
+                      ) : null}
+                    </View>
+                  ) : null}
+                </>
               )}
+
               <Text style={s.notifTime}>{relativeTime(n.created_at)}</Text>
 
               {isPending && (
@@ -253,6 +406,17 @@ function NotifsSection() {
 
       <View style={{ height: 24 }} />
     </ScrollView>
+
+    {borrowerModal && (
+      <BorrowerProfileModal
+        borrowerId={borrowerModal.borrowerId}
+        name={borrowerModal.name}
+        initial={borrowerModal.initial}
+        currentUserId={currentUserId}
+        onClose={() => setBorrowerModal(null)}
+      />
+    )}
+    </>
   );
 }
 
@@ -266,27 +430,40 @@ function relativeTime(iso: string): string {
   return `hace ${Math.floor(hrs / 24)}d`;
 }
 
-function ChatsSection() {
+export function ChatsSection({ onUnreadCount }: { onUnreadCount?: (n: number) => void }) {
   const [conversations, setConversations] = useState<any[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const swipeableRefs = useRef<Record<string, Swipeable | null>>({});
 
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setUserId(data.user?.id ?? null));
-    fetchConversations().then(({ data }) => {
-      setConversations(data ?? []);
-      setLoading(false);
-    });
-  }, []);
+  const load = useCallback(async () => {
+    const [{ data: { user } }, { data: convs }] = await Promise.all([
+      supabase.auth.getUser(),
+      fetchConversations(),
+    ]);
+    const uid = user?.id ?? null;
+    setUserId(uid);
+    const list = convs ?? [];
+    setConversations(list);
+    setLoading(false);
+    if (onUnreadCount && uid) {
+      const total = list.reduce((sum: number, c: any) =>
+        sum + (c.messages ?? []).filter((m: any) => !m.read && m.sender_id !== uid).length, 0);
+      onUnreadCount(total);
+    }
+  }, [onUnreadCount]);
+
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const getOther = (conv: any) => {
-    if (!userId) return { name: '…', initial: '?' };
-    if (conv.owner_id === userId) {
-      const b = conv.borrower;
-      return { name: `${b?.nombre ?? ''} ${b?.apellido ?? ''}`.trim() || 'Vecino', initial: b?.nombre?.[0]?.toUpperCase() ?? 'V' };
-    }
-    const o = conv.owner;
-    return { name: `${o?.nombre ?? ''} ${o?.apellido ?? ''}`.trim() || 'Vecino', initial: o?.nombre?.[0]?.toUpperCase() ?? 'V' };
+    if (!userId) return { name: '…', initial: '?', avatarUrl: null };
+    const p = conv.owner_id === userId ? conv.borrower : conv.owner;
+    return {
+      name: `${p?.nombre ?? ''} ${p?.apellido ?? ''}`.trim() || 'Vecino',
+      initial: p?.nombre?.[0]?.toUpperCase() ?? 'V',
+      avatarUrl: p?.avatar_url ?? null,
+    };
   };
 
   const getUnread = (conv: any) =>
@@ -294,65 +471,149 @@ function ChatsSection() {
 
   const getLastMsg = (conv: any) => {
     const msgs = conv.messages ?? [];
-    const last = msgs[msgs.length - 1];
-    return last ?? null;
+    return msgs[msgs.length - 1] ?? null;
   };
 
-  return (
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.list}>
-      <Text style={s.sectionLabel}>CONVERSACIONES</Text>
+  const isClosed = (conv: any) =>
+    (conv.reservations ?? []).some((r: any) => r.transaction_status === 'completed');
 
-      {loading ? (
-        <ActivityIndicator color={PURPLE} style={{ marginTop: 16 }} />
-      ) : (
-        conversations.map((conv) => {
-          const other = getOther(conv);
-          const unread = getUnread(conv);
-          const lastMsg = getLastMsg(conv);
-          const lastText = lastMsg?.content ?? '';
-          const timeStr = lastMsg?.created_at ? relativeTime(lastMsg.created_at) : '';
+  const handleDelete = async (convId: string) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setConversations((prev) => {
+      const next = prev.filter((c) => c.id !== convId);
+      if (onUnreadCount && userId) {
+        const total = next.reduce((sum: number, c: any) =>
+          sum + (c.messages ?? []).filter((m: any) => !m.read && m.sender_id !== userId).length, 0);
+        onUnreadCount(total);
+      }
+      return next;
+    });
+    await deleteConversation(convId);
+  };
 
-          return (
-            <TouchableOpacity
-              key={conv.id}
-              style={s.chatCard}
-              activeOpacity={0.75}
-              onPress={() => router.push({ pathname: '/chat', params: { id: conv.id } })}
-            >
-              <View style={s.chatAvatar}>
-                <Text style={s.chatAvatarText}>{other.initial}</Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <View style={s.chatTopRow}>
-                  <Text style={s.chatName}>{other.name}</Text>
-                  {timeStr ? <Text style={s.chatTime}>{timeStr}</Text> : null}
-                </View>
-                <Text style={s.chatItem}>{conv.item?.name ?? 'Ítem'}</Text>
-                {lastText ? (
-                  <Text style={s.chatLast} numberOfLines={1}>{lastText}</Text>
-                ) : (
-                  <Text style={[s.chatLast, { color: BODY, fontStyle: 'italic' }]}>Nueva conversación</Text>
-                )}
-              </View>
-              {unread > 0 && (
-                <View style={s.unreadBadge}>
-                  <Text style={s.unreadBadgeText}>{unread}</Text>
-                </View>
-              )}
-            </TouchableOpacity>
+  const renderRightActions = (convId: string, closed: boolean) => (
+    <TouchableOpacity
+      onPress={() => {
+        if (!closed) {
+          swipeableRefs.current[convId]?.close();
+          Alert.alert(
+            'No podés borrar esta conversación',
+            'Solo podés eliminar chats cuya transacción haya finalizado. Esperá a que se complete el intercambio.',
+            [{ text: 'Entendido' }]
           );
-        })
-      )}
+          return;
+        }
+        handleDelete(convId);
+      }}
+      activeOpacity={0.8}
+      style={s.swipeDeleteWrap}
+    >
+      <View style={s.swipeDelete}>
+        <Feather name="trash-2" size={22} color="#FFF" />
+      </View>
+    </TouchableOpacity>
+  );
 
-      {!loading && conversations.length === 0 && (
-        <View style={s.emptyChats}>
-          <Feather name="message-circle" size={28} color={BODY} />
-          <Text style={s.emptyText}>Las nuevas conversaciones{'\n'}aparecerán aquí</Text>
-        </View>
-      )}
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? conversations.filter((conv) => {
+        const other = getOther(conv);
+        return (
+          other.name.toLowerCase().includes(q) ||
+          (conv.item?.name ?? '').toLowerCase().includes(q)
+        );
+      })
+    : conversations;
 
-      <View style={{ height: 24 }} />
-    </ScrollView>
+  return (
+    <View style={{ flex: 1 }}>
+      {/* Search bar */}
+      <View style={s.chatSearchWrap}>
+        <Feather name="search" size={15} color={BODY} />
+        <TextInput
+          style={s.chatSearchInput}
+          placeholder="Buscar por nombre o producto…"
+          placeholderTextColor={BODY}
+          value={search}
+          onChangeText={setSearch}
+          autoCorrect={false}
+        />
+        {search.length > 0 && (
+          <TouchableOpacity onPress={() => setSearch('')} hitSlop={8}>
+            <Feather name="x" size={15} color={BODY} />
+          </TouchableOpacity>
+        )}
+      </View>
+
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={s.list}>
+        <Text style={s.sectionLabel}>CONVERSACIONES</Text>
+
+        {loading ? (
+          <ActivityIndicator color={PURPLE} style={{ marginTop: 16 }} />
+        ) : (
+          filtered.map((conv) => {
+            const other = getOther(conv);
+            const unread = getUnread(conv);
+            const lastMsg = getLastMsg(conv);
+            const lastText = lastMsg?.content ?? '';
+            const timeStr = lastMsg?.created_at ? relativeTime(lastMsg.created_at) : '';
+            const closed = isClosed(conv);
+
+            return (
+              <View key={conv.id} style={{ overflow: 'hidden', borderRadius: 16, marginBottom: 10 }}>
+                <Swipeable
+                  ref={(ref) => { swipeableRefs.current[conv.id] = ref; }}
+                  renderRightActions={() => renderRightActions(conv.id, closed)}
+                  rightThreshold={60}
+                >
+                  <TouchableOpacity
+                    style={s.chatCard}
+                    activeOpacity={0.75}
+                    onPress={() => router.push({ pathname: '/chat', params: { id: conv.id } })}
+                  >
+                    <View style={s.chatAvatar}>
+                      {other.avatarUrl ? (
+                        <Image source={{ uri: other.avatarUrl }} style={s.chatAvatarImg} />
+                      ) : (
+                        <Text style={s.chatAvatarText}>{other.initial}</Text>
+                      )}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <View style={s.chatTopRow}>
+                        <Text style={s.chatName}>{other.name}</Text>
+                        {timeStr ? <Text style={s.chatTime}>{timeStr}</Text> : null}
+                      </View>
+                      <Text style={s.chatItem}>{conv.item?.name ?? 'Ítem'}</Text>
+                      {lastText ? (
+                        <Text style={s.chatLast} numberOfLines={1}>{lastText}</Text>
+                      ) : (
+                        <Text style={[s.chatLast, { color: BODY, fontStyle: 'italic' }]}>Nueva conversación</Text>
+                      )}
+                    </View>
+                    {unread > 0 && (
+                      <View style={s.unreadBadge}>
+                        <Text style={s.unreadBadgeText}>{unread}</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                </Swipeable>
+              </View>
+            );
+          })
+        )}
+
+        {!loading && filtered.length === 0 && (
+          <View style={s.emptyChats}>
+            <Feather name="message-circle" size={28} color={BODY} />
+            <Text style={s.emptyText}>
+              {q ? 'Sin resultados' : 'Las nuevas conversaciones\naparecerán aquí'}
+            </Text>
+          </View>
+        )}
+
+        <View style={{ height: 24 }} />
+      </ScrollView>
+    </View>
   );
 }
 
@@ -680,7 +941,7 @@ function CalendarSection() {
 
 // ─── Main export ─────────────────────────────────────────────────────────────
 
-type SubTab = 'notifs' | 'chats' | 'cal';
+type SubTab = 'notifs' | 'cal';
 
 export default function AlertsTab() {
   const [sub, setSub] = useState<SubTab>('notifs');
@@ -691,7 +952,6 @@ export default function AlertsTab() {
       <View style={s.subBar}>
         {([
           { key: 'notifs', label: 'Notificaciones', badge: 0 },
-          { key: 'chats',  label: 'Chats',          badge: 0 },
           { key: 'cal',    label: 'Calendario',     badge: 0 },
         ] as { key: SubTab; label: string; badge: number }[]).map((t) => (
           <TouchableOpacity
@@ -711,7 +971,6 @@ export default function AlertsTab() {
       </View>
 
       {sub === 'notifs' && <NotifsSection />}
-      {sub === 'chats'  && <ChatsSection />}
       {sub === 'cal'    && <CalendarSection />}
     </View>
   );
@@ -776,11 +1035,58 @@ const s = StyleSheet.create({
     borderColor: 'rgba(245,158,11,0.4)',
     backgroundColor: 'rgba(245,158,11,0.06)',
   },
-  notifBorrower: {
-    fontFamily: 'Inter_600SemiBold',
-    color: '#F59E0B',
-    fontSize: 13,
+  notifBorrowerLink: {
+    fontFamily: 'Inter_700Bold',
+    color: '#C4B5FD',
+    fontSize: 14,
+    textDecorationLine: 'underline',
   },
+  notifBorrowerSuffix: {
+    fontFamily: 'Inter_400Regular',
+    color: GRAY,
+    fontSize: 14,
+  },
+  notifItemName: {
+    fontFamily: 'Inter_600SemiBold',
+    color: '#FFFFFF',
+    fontSize: 14,
+  },
+  borrowerAvatar: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: 'rgba(139,92,246,0.2)',
+    borderWidth: 2,
+    borderColor: PURPLE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  borrowerAvatarText: { fontFamily: 'Inter_700Bold', color: '#C4B5FD', fontSize: 26 },
+  borrowerName: { fontFamily: 'Inter_700Bold', color: '#FFFFFF', fontSize: 20, marginBottom: 6 },
+  historyBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(16,185,129,0.12)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.3)',
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  historyBadgeText: { fontFamily: 'Inter_500Medium', color: GREEN, fontSize: 12 },
+  ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 6 },
+  ratingText: { fontFamily: 'Inter_700Bold', color: '#F59E0B', fontSize: 14 },
+  ratingCount: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 13 },
+  reviewRow: { paddingVertical: 12 },
+  reviewRowBorder: { borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)' },
+  reviewHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  reviewerName: { fontFamily: 'Inter_600SemiBold', color: '#FFFFFF', fontSize: 13 },
+  reviewStars: { flexDirection: 'row', gap: 2 },
+  reviewComment: { fontFamily: 'Inter_400Regular', color: GRAY, fontSize: 13, lineHeight: 18 },
   notifResRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -877,6 +1183,29 @@ const s = StyleSheet.create({
     backgroundColor: PURPLE, marginLeft: 6, marginTop: 2,
   },
 
+  // Chat search
+  chatSearchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: 20,
+    marginTop: 12,
+    marginBottom: 4,
+    backgroundColor: CARD_BG,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  chatSearchInput: {
+    flex: 1,
+    fontFamily: 'Inter_400Regular',
+    color: '#FFFFFF',
+    fontSize: 14,
+    padding: 0,
+  },
+
   // Chats
   sectionLabel: {
     fontFamily: 'Inter_700Bold',
@@ -905,6 +1234,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   chatAvatarText: { fontFamily: 'Inter_700Bold', color: '#C4B5FD', fontSize: 18 },
+  chatAvatarImg: { width: 46, height: 46, borderRadius: 23 },
   chatTopRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 2 },
   chatName: { fontFamily: 'Inter_600SemiBold', color: '#FFFFFF', fontSize: 15 },
   chatTime: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 12 },

@@ -7,6 +7,7 @@ import {
   Alert,
   Animated,
   Dimensions,
+  Easing,
   Image,
   LayoutAnimation,
   Modal,
@@ -21,15 +22,15 @@ import {
   UIManager,
   View,
 } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
-import { Swipeable } from 'react-native-gesture-handler';
 
 if (Platform.OS === 'android') {
   UIManager.setLayoutAnimationEnabledExperimental?.(true);
 }
 import { SafeAreaView } from 'react-native-safe-area-context';
-import AlertsTab from '../components/AlertsTab';
+import AlertsTab, { ChatsSection } from '../components/AlertsTab';
 import PlanetRank, { getPlanet, PLANETS } from '../components/PlanetRank';
 import SearchTab from '../components/SearchTab';
 import { useLocation } from '../hooks/useLocation';
@@ -436,10 +437,11 @@ function ProfileTab({ user, profile, itemCount, onPlanetPress, myRating, monthly
 // ─── Home screen ─────────────────────────────────────────────────────────────
 
 const TABS = [
-  { key: 'home',    icon: 'home',   label: 'Inicio' },
-  { key: 'search',  icon: 'search', label: 'Reservar' },
-  { key: 'alerts',  icon: 'bell',   label: 'Alertas' },
-  { key: 'profile', icon: 'user',   label: 'Perfil' },
+  { key: 'home',    icon: 'home',           label: 'Inicio' },
+  { key: 'search',  icon: 'search',         label: 'Reservar' },
+  { key: 'alerts',  icon: 'bell',           label: 'Alertas' },
+  { key: 'chat',    icon: 'message-circle', label: 'Chat' },
+  { key: 'profile', icon: 'user',           label: 'Perfil' },
 ] as const;
 
 type TabKey = typeof TABS[number]['key'];
@@ -458,6 +460,7 @@ export default function HomeScreen() {
   const [planetModalVisible, setPlanetModalVisible] = useState(false);
   const [lowRatingVisible, setLowRatingVisible] = useState(false);
   const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [showReportModal, setShowReportModal] = useState(false);
   const [reportReservationId, setReportReservationId] = useState<string | null>(null);
@@ -474,52 +477,63 @@ export default function HomeScreen() {
   const itemSwipeRefs = useRef<Record<string, Swipeable | null>>({});
   const tabOffsetX = useRef(new Animated.Value(0)).current;
   const currentTabIdxRef = useRef(0);
+  const swipingRef = useRef(false);
+  const catBarRegion = useRef<{ top: number; bottom: number } | null>(null);
 
   const switchTab = useCallback((key: TabKey) => {
+    if (swipingRef.current) return;
     const idx = TABS.findIndex((t) => t.key === key);
     currentTabIdxRef.current = idx;
     setActiveTab(key);
-    Animated.spring(tabOffsetX, {
+    Animated.timing(tabOffsetX, {
       toValue: -idx * SCREEN_WIDTH,
+      duration: 280,
+      easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
-      tension: 110,
-      friction: 14,
     }).start();
   }, [tabOffsetX]);
 
   const swipePan = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (_, gs) =>
-        Math.abs(gs.dx) > 12 && Math.abs(gs.dx) > Math.abs(gs.dy) * 2.5,
+      onMoveShouldSetPanResponder: (_, gs) => {
+        if (catBarRegion.current) {
+          const { top, bottom } = catBarRegion.current;
+          if (gs.y0 >= top && gs.y0 <= bottom) return false;
+        }
+        return Math.abs(gs.dx) > 12 && Math.abs(gs.dx) > Math.abs(gs.dy) * 2.5;
+      },
       onPanResponderGrant: () => {
+        swipingRef.current = true;
         tabOffsetX.stopAnimation();
       },
       onPanResponderMove: (_, gs) => {
         const base = -currentTabIdxRef.current * SCREEN_WIDTH;
-        const raw  = base + gs.dx;
-        const min  = -(TABS.length - 1) * SCREEN_WIDTH;
+        const raw = base + gs.dx;
+        const min = -(TABS.length - 1) * SCREEN_WIDTH;
         tabOffsetX.setValue(Math.max(min, Math.min(0, raw)));
       },
       onPanResponderRelease: (_, gs) => {
+        swipingRef.current = false;
         const idx = currentTabIdxRef.current;
         let newIdx = idx;
         if ((gs.dx < -40 || gs.vx < -0.4) && idx < TABS.length - 1) newIdx = idx + 1;
         else if ((gs.dx > 40 || gs.vx > 0.4) && idx > 0) newIdx = idx - 1;
         currentTabIdxRef.current = newIdx;
         setActiveTab(TABS[newIdx].key);
-        Animated.spring(tabOffsetX, {
+        Animated.timing(tabOffsetX, {
           toValue: -newIdx * SCREEN_WIDTH,
+          duration: 280,
+          easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
-          tension: 110,
-          friction: 14,
         }).start();
       },
       onPanResponderTerminate: () => {
-        Animated.spring(tabOffsetX, {
+        swipingRef.current = false;
+        Animated.timing(tabOffsetX, {
           toValue: -currentTabIdxRef.current * SCREEN_WIDTH,
+          duration: 280,
+          easing: Easing.out(Easing.cubic),
           useNativeDriver: true,
-          tension: 110,
-          friction: 14,
         }).start();
       },
     })
@@ -702,7 +716,7 @@ export default function HomeScreen() {
         </View>
 
         <View style={{ flex: 1, overflow: 'hidden' }} {...swipePan.panHandlers}>
-          <Animated.View style={{ flexDirection: 'row', width: SCREEN_WIDTH * TABS.length, flex: 1, transform: [{ translateX: tabOffsetX }] }}>
+          <Animated.View style={[{ flexDirection: 'row', width: SCREEN_WIDTH * TABS.length, flex: 1 }, { transform: [{ translateX: tabOffsetX }] }]}>
 
         {/* ── Home tab ── */}
         <View style={{ width: SCREEN_WIDTH, flex: 1 }}>
@@ -1011,12 +1025,17 @@ export default function HomeScreen() {
 
         {/* ── Search tab ── */}
         <View style={{ width: SCREEN_WIDTH, flex: 1 }}>
-          <SearchTab userCoords={userCoords} />
+          <SearchTab userCoords={userCoords} onCatBarLayout={(top, bottom) => { catBarRegion.current = { top, bottom }; }} />
         </View>
 
         {/* ── Alerts tab ── */}
         <View style={{ width: SCREEN_WIDTH, flex: 1 }}>
           <AlertsTab />
+        </View>
+
+        {/* ── Chat tab ── */}
+        <View style={{ width: SCREEN_WIDTH, flex: 1 }}>
+          <ChatsSection onUnreadCount={setUnreadChatCount} />
         </View>
 
         {/* ── Profile tab ── */}
@@ -1126,7 +1145,10 @@ export default function HomeScreen() {
         <View style={styles.tabBar}>
           {TABS.map((tab) => {
             const active = activeTab === tab.key;
-            const badge = tab.key === 'alerts' && unreadNotifCount > 0 ? unreadNotifCount : 0;
+            const badge =
+              tab.key === 'alerts' && unreadNotifCount > 0 ? unreadNotifCount :
+              tab.key === 'chat' && unreadChatCount > 0 ? unreadChatCount :
+              0;
             return (
               <TouchableOpacity key={tab.key} style={styles.tab} activeOpacity={0.7} onPress={() => switchTab(tab.key)}>
                 <View style={{ position: 'relative' }}>

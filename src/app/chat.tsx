@@ -5,6 +5,8 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
+  Image,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -15,8 +17,8 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { checkConflict, createNotification, createReservation, fetchConversation, fetchMessages, sendMessage, supabase } from '../lib/supabase';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { checkConflict, createNotification, createReservation, fetchConversation, fetchMessages, markMessagesRead, sendMessage, supabase } from '../lib/supabase';
 
 const BG = '#080A1A';
 const CARD_BG = '#13142A';
@@ -415,6 +417,7 @@ export default function ChatScreen() {
   const [myId, setMyId] = useState<string | null>(null);
   const [headerName, setHeaderName] = useState('');
   const [headerInitial, setHeaderInitial] = useState('');
+  const [headerAvatarUrl, setHeaderAvatarUrl] = useState<string | null>(null);
   const [headerItem, setHeaderItem] = useState('');
   const [messages, setMessages] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -427,6 +430,14 @@ export default function ChatScreen() {
   const [isClosed, setIsClosed] = useState(false);
 
   const listRef = useRef<FlatList>(null);
+  const insets = useSafeAreaInsets();
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardWillShow', () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener('keyboardWillHide', () => setKeyboardVisible(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
 
   // ── Load ─────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -452,6 +463,7 @@ export default function ChatScreen() {
         const name = other ? `${other.nombre} ${other.apellido}` : 'Vecino';
         setHeaderName(name);
         setHeaderInitial(name[0]?.toUpperCase() ?? '?');
+        setHeaderAvatarUrl(other?.avatar_url ?? null);
         setHeaderItem(conv.item?.name ?? '');
         setConvItemId(conv.item_id ?? null);
         setConvOwnerId(conv.owner_id ?? null);
@@ -465,6 +477,7 @@ export default function ChatScreen() {
       if (res?.transaction_status === 'completed') setIsClosed(true);
       const { data: msgs } = await fetchMessages(id);
       setMessages(msgs ?? []);
+      markMessagesRead(id);
       const lastTheirs = [...(msgs ?? [])].reverse().find((m) => m.sender_id !== user?.id && m.type === 'text');
       if (lastTheirs) setQuickReplies(getQuickReplies(lastTheirs.content));
       setLoading(false);
@@ -633,7 +646,11 @@ export default function ChatScreen() {
           </TouchableOpacity>
           <View style={styles.headerCenter}>
             <View style={styles.headerAvatar}>
-              <Text style={styles.headerAvatarText}>{headerInitial}</Text>
+              {headerAvatarUrl ? (
+                <Image source={{ uri: headerAvatarUrl }} style={styles.headerAvatarImg} />
+              ) : (
+                <Text style={styles.headerAvatarText}>{headerInitial}</Text>
+              )}
             </View>
             <View>
               <Text style={styles.headerName} numberOfLines={1}>{headerName}</Text>
@@ -658,6 +675,13 @@ export default function ChatScreen() {
             showsVerticalScrollIndicator={false}
             style={{ flex: 1 }}
             renderItem={({ item: msg, index }) => {
+              if (msg.type === 'system') {
+                return (
+                  <View key={msg.id} style={styles.systemMsgWrap}>
+                    <Text style={styles.systemMsgText}>{msg.content}</Text>
+                  </View>
+                );
+              }
               if (msg.type === 'reservation_prompt') {
                 return <ReservationPromptBubble onReserve={() => setConfirmModalVisible(true)} />;
               }
@@ -684,12 +708,20 @@ export default function ChatScreen() {
                 <View style={[styles.msgRow, mine && styles.msgRowMine]}>
                   {!mine && (
                     <View style={[styles.msgAvatar, { opacity: showAvatar ? 1 : 0 }]}>
-                      <Text style={styles.msgAvatarText}>{headerInitial}</Text>
+                      {headerAvatarUrl ? (
+                        <Image source={{ uri: headerAvatarUrl }} style={styles.msgAvatarImg} />
+                      ) : (
+                        <Text style={styles.msgAvatarText}>{headerInitial}</Text>
+                      )}
                     </View>
                   )}
                   <View style={styles.msgCol}>
-                    <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs]}>
-                      <Text style={styles.bubbleText}>{msg.content}</Text>
+                    <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleTheirs, msg.type === 'image' && styles.bubbleImage]}>
+                      {msg.type === 'image' ? (
+                        <Image source={{ uri: msg.content }} style={styles.msgImage} resizeMode="cover" />
+                      ) : (
+                        <Text style={styles.bubbleText}>{msg.content}</Text>
+                      )}
                     </View>
                     <Text style={[styles.msgTime, mine && styles.msgTimeMine]}>
                       {formatTime(msg.created_at)}
@@ -700,7 +732,7 @@ export default function ChatScreen() {
             }}
           />
 
-          <SafeAreaView edges={['bottom']} style={styles.inputSafe}>
+          <View style={[styles.inputSafe, { paddingBottom: keyboardVisible ? 0 : insets.bottom }]}>
             {isClosed ? (
               <View style={styles.closedBanner}>
                 <Feather name="lock" size={14} color={BODY} />
@@ -753,7 +785,7 @@ export default function ChatScreen() {
                 </View>
               </>
             )}
-          </SafeAreaView>
+          </View>
         </KeyboardAvoidingView>
       )}
 
@@ -777,6 +809,7 @@ const styles = StyleSheet.create({
   headerCenter: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, justifyContent: 'center' },
   headerAvatar: { width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(139,92,246,0.2)', alignItems: 'center', justifyContent: 'center' },
   headerAvatarText: { fontFamily: 'Inter_700Bold', color: '#C4B5FD', fontSize: 16 },
+  headerAvatarImg: { width: 38, height: 38, borderRadius: 19 },
   headerName: { fontFamily: 'Inter_600SemiBold', color: '#FFFFFF', fontSize: 15 },
   headerSub: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 12 },
 
@@ -785,10 +818,15 @@ const styles = StyleSheet.create({
   msgRowMine: { flexDirection: 'row-reverse' },
   msgAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(139,92,246,0.2)', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   msgAvatarText: { fontFamily: 'Inter_700Bold', color: '#C4B5FD', fontSize: 11 },
+  msgAvatarImg: { width: 28, height: 28, borderRadius: 14 },
   msgCol: { maxWidth: '72%', gap: 3 },
   bubble: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 18 },
   bubbleTheirs: { backgroundColor: CARD_BG, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)', borderBottomLeftRadius: 4 },
   bubbleMine: { backgroundColor: PURPLE, borderBottomRightRadius: 4 },
+  bubbleImage: { padding: 4, overflow: 'hidden' },
+  msgImage: { width: 220, height: 180, borderRadius: 14 },
+  systemMsgWrap: { alignItems: 'center', marginVertical: 10, paddingHorizontal: 24 },
+  systemMsgText: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 12, textAlign: 'center', fontStyle: 'italic' },
   bubbleText: { fontFamily: 'Inter_400Regular', color: '#FFFFFF', fontSize: 15, lineHeight: 21 },
   msgTime: { fontFamily: 'Inter_400Regular', color: BODY, fontSize: 11, paddingLeft: 4 },
   msgTimeMine: { textAlign: 'right', paddingRight: 4 },

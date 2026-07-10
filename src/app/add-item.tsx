@@ -244,7 +244,7 @@ const PRICE_UNIT: Record<Category, string> = {
   lavarropas:  '/uso',
   impresora:   '/hoja',
   herramienta: '/día',
-  bicicleta:   '/h',
+  bicicleta:   '/día',
   parlante:    '/día',
   otro:        '/uso',
 };

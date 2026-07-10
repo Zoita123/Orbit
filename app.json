@@ -8,7 +8,10 @@
     "scheme": "orbitapp",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "bundleIdentifier": "com.zoeborrone.orbitapp"
+      "bundleIdentifier": "com.zoeborrone.orbitapp",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -21,8 +24,7 @@
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.RECORD_AUDIO"
       ],
       "package": "com.anonymous.orbitapp"
     },
@@ -49,11 +51,25 @@
           "locationWhenInUsePermission": "orbit usa tu ubicación para mostrarte ítems cercanos."
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "orbit necesita acceso a tus fotos para que puedas agregar imágenes a tus productos.",
+          "cameraPermission": "orbit necesita acceso a tu cámara para sacar fotos de tus productos."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "5077d1fa-fcb6-4feb-940b-aaa21114bca8"
+      }
+    },
+    "owner": "zoeborrone"
   }
 }
